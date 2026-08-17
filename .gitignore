@@ -5,3 +5,6 @@ report.json
 *.egg-info/
 .venv/
 dist/
+tasks/*/bundle/tests/reward.txt
+tasks/*/bundle/tests/score.*
+tasks/*/bundle/tests/junit.xml

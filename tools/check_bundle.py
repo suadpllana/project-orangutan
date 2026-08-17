@@ -151,6 +151,11 @@ def check_structure(bundle: Path, report: Report) -> dict | None:
         seen[lowered] = relative
         if "__pycache__" in parts or path.name.endswith(".pyc"):
             report.warn(f"build artefact in the bundle: {relative}")
+        if path.name in ("reward.txt", "score.txt", "score.json", "junit.xml"):
+            report.warn(
+                f"reward artefact left by a local grader run: {relative} — "
+                f"delete it; a stale score must never ship inside the archive"
+            )
 
     toml_path = bundle / "task.toml"
     if not toml_path.is_file():

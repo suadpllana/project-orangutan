@@ -4,10 +4,11 @@
     python3 tools/build_bundle.py tasks/<slug>
     python3 tools/build_bundle.py --all
 
-Writes dist/<slug>.zip with the bundle rooted at a single <slug>/ directory,
-matching the layout in the guideline. Runs check_bundle first and refuses to
-package a bundle that fails it, because a rejected upload still burns an
-artifact.
+Writes dist/<slug>.zip with the bundle's contents at the ARCHIVE ROOT - no
+<slug>/ wrapper, because the inspector looks for "task.toml", not
+"<slug>/task.toml". Runs check_bundle first and refuses to package a bundle that
+fails it, because a rejected upload still burns an artifact, then re-opens the
+finished archive and asserts the five required paths are really in it.
 
 Executable bits matter: tests/test.sh and solution/solve.sh are the entrypoints
 the harness invokes, so their mode is preserved explicitly rather than left to
@@ -28,6 +29,9 @@ DIST = REPO / "dist"
 
 SKIP_DIRS = {"__pycache__", ".pytest_cache", ".git"}
 SKIP_SUFFIXES = {".pyc", ".pyo"}
+# Reward artefacts a local grader run leaves behind. Shipping one would put a
+# stale score inside the archive.
+SKIP_NAMES = {"reward.txt", "score.txt", "score.json", "junit.xml"}
 EXECUTABLE = {"tests/test.sh", "solution/solve.sh"}
 
 # The exact set the inspection stage looks for, at the archive root.
@@ -42,6 +46,8 @@ REQUIRED_PATHS = [
 
 def should_skip(relative: Path) -> bool:
     if any(part in SKIP_DIRS for part in relative.parts):
+        return True
+    if relative.name in SKIP_NAMES:
         return True
     return relative.suffix in SKIP_SUFFIXES
 
