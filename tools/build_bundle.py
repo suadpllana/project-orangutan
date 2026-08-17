@@ -30,6 +30,15 @@ SKIP_DIRS = {"__pycache__", ".pytest_cache", ".git"}
 SKIP_SUFFIXES = {".pyc", ".pyo"}
 EXECUTABLE = {"tests/test.sh", "solution/solve.sh"}
 
+# The exact set the inspection stage looks for, at the archive root.
+REQUIRED_PATHS = [
+    "task.toml",
+    "instruction.md",
+    "environment/Dockerfile",
+    "tests/test.sh",
+    "solution/solve.sh",
+]
+
 
 def should_skip(relative: Path) -> bool:
     if any(part in SKIP_DIRS for part in relative.parts):
@@ -62,7 +71,13 @@ def build(task_dir: Path, run_checks: bool) -> bool:
             relative = path.relative_to(bundle)
             if should_skip(relative):
                 continue
-            info = zipfile.ZipInfo(str(Path(slug) / relative))
+            # Paths go in at the ARCHIVE ROOT, with no <slug>/ wrapper: the
+            # inspector looks for "task.toml", not "<slug>/task.toml".  The
+            # guideline's `my-task/` diagram is the on-disk task directory whose
+            # *contents* are zipped, not a level inside the archive - reading it
+            # the other way got a bundle rejected for "required file missing"
+            # with all five files present one directory too deep.
+            info = zipfile.ZipInfo(str(relative))
             info.compress_type = zipfile.ZIP_DEFLATED
             mode = stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH
             if str(relative) in EXECUTABLE or path.stat().st_mode & stat.S_IXUSR:
@@ -71,8 +86,23 @@ def build(task_dir: Path, run_checks: bool) -> bool:
             archive.writestr(info, path.read_bytes())
             written += 1
 
+    # Verify the archive we just wrote, not the directory we read.  Everything
+    # else in this repository checks `bundle/` on disk, which is exactly what
+    # let a packaging bug through.
+    with zipfile.ZipFile(target) as archive:
+        names = set(archive.namelist())
+    missing = [path for path in REQUIRED_PATHS if path not in names]
+    if missing:
+        print(
+            f"error: {', '.join(missing)} not at the archive root - the "
+            f"inspector will reject this as 'required file missing'",
+            file=sys.stderr,
+        )
+        return False
+
     size = target.stat().st_size
     print(f"wrote {target.relative_to(REPO)} ({written} files, {size:,} bytes)")
+    print("      required paths present at the archive root")
     if size > 512 * 1024 * 1024:
         print("error: over the 512 MiB upload cap", file=sys.stderr)
         return False

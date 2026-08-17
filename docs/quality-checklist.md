@@ -24,6 +24,9 @@ docker build -t <slug> tasks/<slug>/bundle/environment/
       keep the Dockerfile free of `RUN` heredocs, which the classic parser does
       not join across newlines.
 - [ ] `tests/test.sh` and `solution/solve.sh` are executable in the ZIP.
+- [ ] The five required paths are at the **root of the ZIP**, with no `<slug>/`
+      wrapper. Check the archive you are about to upload, not the directory it
+      came from: `unzip -l dist/<slug>.zip | head`.
 
 ## Resources and network
 

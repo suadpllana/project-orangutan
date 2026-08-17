@@ -5,8 +5,15 @@ compressed**, in the Terminal-Bench / Harbor task format. Everything the harness
 needs to build the environment, run the reference solution, and grade the result
 lives inside it.
 
+**The paths below are relative to the archive root.** `my-task/` is the task
+directory on your disk, whose *contents* you zip — it is **not** a level inside
+the archive. A ZIP whose entries read `my-task/task.toml` is rejected at
+inspection with *"required file missing"*, because the inspector looks for
+`task.toml`. This cost one upload artifact; `tools/build_bundle.py` now asserts
+the five required paths exist at the root of the ZIP it just wrote.
+
 ```
-my-task/
+my-task/                 <- your directory; zip its CONTENTS, not itself
 ├── task.toml            # [metadata], [verifier], [agent], [environment]
 ├── instruction.md       # the problem statement the agent reads
 ├── environment/
@@ -127,7 +134,8 @@ to overfit the hidden part. **Say which is which in `verificationStrategy`.**
 In this repository's task, the visible half is `environment/tests/test_basic.py`
 (13 tests, baked into the image, describing only behaviour that already exists)
 and the hidden half is all of `tests/` (117 tests plus the grader). The visible
-half is also scored at weight zero and used as a gate — see the nop-floor note
+half is also scored at weight zero, with its pass ratio multiplying the final
+score — see the nop-floor note
 in `verifier-patterns.md` for why.
 
 ## Packaging
@@ -137,9 +145,10 @@ python3 tools/check_bundle.py tasks/<slug>    # structure + quality + cross-chec
 python3 tools/build_bundle.py tasks/<slug>    # writes dist/<slug>.zip
 ```
 
-`build_bundle.py` roots the archive at a single `<slug>/` directory, skips
-`__pycache__` and `.pyc`, and preserves the executable bit on `tests/test.sh`
-and `solution/solve.sh`.
+`build_bundle.py` writes entries at the archive root (no `<slug>/` wrapper),
+skips `__pycache__` and `.pyc`, preserves the executable bit on `tests/test.sh`
+and `solution/solve.sh`, and re-opens the finished ZIP to assert the five
+required paths are really there before it reports success.
 
 Resubmitting a byte-for-byte identical bundle is blocked by content hash, and
 near-duplicates are caught by the similarity stage — so make each task genuinely

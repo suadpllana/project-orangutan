@@ -85,7 +85,7 @@ prints `REWARD <score>` and `BINARY_PASS <true|false>`.
 
 ---
 
-## The ten rules
+## The eleven rules
 
 Ordered by how much grief each one saves.
 
@@ -98,12 +98,21 @@ and the result had the right task inside the wrong container: no `task.toml`, no
 half the metadata did not. If a source you were pointed at is unreachable, stop
 and say so — do not infer a spec you were told exists.
 
-**2. The tests are the task.** Prose is cheap to write and easy to make sound
+**2. Check the artifact you are shipping, not the directory it came from.** The
+first upload of the minikv bundle was rejected at inspection for "required file
+missing" with all five required files present — one directory too deep, because
+`build_bundle.py` wrapped the archive in a `<slug>/` directory. Every check in
+this repository looked at `bundle/` on disk and passed. The required paths are
+relative to the **archive root**; the guideline's `my-task/` diagram is the
+directory whose contents you zip. `build_bundle.py` now re-opens the ZIP and
+asserts the five paths before reporting success.
+
+**3. The tests are the task.** Prose is cheap to write and easy to make sound
 rigorous. A grader either separates a real solution from a plausible one or it
 does not, and the only way to find out is to run it against both. The spec and
 the grader are the work; the draft fields are the write-up.
 
-**3. Write the hidden tests before the reference solution.** Then run the
+**4. Write the hidden tests before the reference solution.** Then run the
 reference against them and expect it to fail. The minikv reference failed two
 tests on its first full run — one was a bug in a test, and **one was a real bug
 in the reference**: after recovering from a truncated log it appended new
@@ -111,7 +120,7 @@ records behind the damaged tail, where recovery would never look again. That
 would have shipped as a "correct" oracle. If your oracle passes first try,
 suspect the tests.
 
-**4. Both ends of the oracle & nop stage have to land.** The reference must
+**5. Both ends of the oracle & nop stage have to land.** The reference must
 reach (near) full reward. The untouched starting state must sit **at its floor**
 — and free credit is easy to ship by accident. Audit it by listing every test
 the seed *passes* and asking what work each one credits. Here that found four
@@ -121,40 +130,40 @@ a non-daemon timer fired during interpreter shutdown after the operation under
 test had already raised; and two throughput benchmarks measuring reads the naive
 store was already fast at. Together: 0.1785 of unearned reward, now 0.0000.
 
-**5. Partial credit is for attempts, not for the seed.** Continuous, monotone
+**6. Partial credit is for attempts, not for the seed.** Continuous, monotone
 scoring makes a task far more useful than an all-or-nothing gate, so keep it —
 but earn it. Weight the categories that measure new capability, and give
 "did not break what already worked" weight zero, letting its pass ratio multiply
 the result — free reward removed, cliff avoided.
 
-**6. Close the obvious shortcut with a different requirement than the one it
+**7. Close the obvious shortcut with a different requirement than the one it
 dodges.** In minikv, "rewrite a snapshot on every commit" satisfies every
 correctness test and dies on the throughput budget. Interacting constraints are
 what make difficulty real instead of a matter of typing volume. A task whose
 requirements are independent is a checklist, not a problem.
 
-**7. Force the design, don't just check the output.** The usual way to fake
+**8. Force the design, don't just check the output.** The usual way to fake
 transaction isolation is one lock held from `begin()` to `commit()`, and it
 looks perfect under any concurrent test. A *single-threaded* test that
 interleaves outside writes deadlocks the fake and answers correctly for the real
 thing. Generalise: if a wrong design is only distinguishable by timing, find the
 call sequence where it stops making progress instead.
 
-**8. Test the ceiling as well as the floor.** Snapshot isolation must *allow*
+**9. Test the ceiling as well as the floor.** Snapshot isolation must *allow*
 write skew, so a serializable implementation is wrong for that spec even though
 it sounds stronger. Without a test asserting the permitted anomaly is permitted,
 "reach for the strongest-sounding guarantee" is a winning strategy and the
 grader is measuring vocabulary. Every negative assertion also needs a positive
 twin: "no corrupt data appears" is satisfied by an empty database.
 
-**9. Assert structural properties, not byte layouts.** The recovery tests do not
+**10. Assert structural properties, not byte layouts.** The recovery tests do not
 know the log format. They damage the file and assert the recovered state is a
 *prefix* of the commit history — no gaps, no invented entries, every value
 checked against its key. Strong, format-agnostic, and it leaves the author free
 to design the encoding. Size bounds get the same treatment: `≤ 4 * live_bytes +
 65536`, never an absolute number that encodes your own constants.
 
-**10. Make cheating structurally impossible, not merely forbidden.** Copy only
+**11. Make cheating structurally impossible, not merely forbidden.** Copy only
 implementation files into a scratch tree the grader owns and run there; that one
 decision kills `conftest.py` injection, `sitecustomize.py`, `pytest.ini`
 deselection and edits to the visible tests, all at once. Then forbid it in
