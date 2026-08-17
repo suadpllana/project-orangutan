@@ -24,7 +24,7 @@ tests/           the existing test suite
 ## Running the tests
 
 ```
-python -m pytest tests -q
+python -m pytest public_tests -q
 ```
 
 These cover what the store already does. They are the floor, not the target —

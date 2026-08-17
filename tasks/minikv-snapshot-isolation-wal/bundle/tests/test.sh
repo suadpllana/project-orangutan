@@ -1,24 +1,51 @@
 #!/usr/bin/env bash
-# Sealed verifier entrypoint. The grader runs exactly this script.
+# Sealed verifier entrypoint.
 #
-# Exit status is 0 when the binary success condition is met and 1 otherwise.
-# The JSON report carries the partial score either way.
-set -uo pipefail
+# Prints a human-readable report, writes the numeric reward to /logs/reward.txt
+# (plus score.json / junit.xml) and exits 0 only when the weighted score reaches
+# the pass threshold declared in task.toml.
+set -u
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SUBMISSION="${SUBMISSION_DIR:-/app}"
-REPORT="${REPORT_PATH:-/tmp/minikv-report.json}"
+export IMPL_ROOT="${IMPL_ROOT:-/app}"
+export LOG_DIR="${LOG_DIR:-/logs}"
 
-mkdir -p "$(dirname "$REPORT")"
-python3 "${HERE}/grade.py" --submission "$SUBMISSION" --out "$REPORT"
+# Locate the sealed suite, whichever way the harness laid the tests out.
+GRADER=""
+for candidate in "$HERE" /tests /app/tests /verifier "$HERE/.."; do
+    if [ -f "$candidate/grade.py" ] && [ -f "$candidate/test_isolation.py" ]; then
+        GRADER="$candidate"
+        break
+    fi
+done
+
+if [ -z "$GRADER" ]; then
+    echo "FATAL: could not locate grade.py + the check suite (looked next to $HERE)" >&2
+    echo "SCORE: 0.0"
+    exit 2
+fi
+
+PY="$(command -v python3 || command -v python)"
+if [ -z "$PY" ]; then
+    echo "FATAL: no python interpreter on PATH" >&2
+    echo "SCORE: 0.0"
+    exit 2
+fi
+
+mkdir -p "$LOG_DIR" 2>/dev/null || true
+
+echo "== minikv verifier =="
+echo "implementation: $IMPL_ROOT"
+"$PY" -c "import sys; print('interpreter:', sys.version.split()[0])"
+echo
+
+"$PY" "$GRADER/grade.py"
 STATUS=$?
 
-# Echo the machine-readable summary so it lands in the harness log too.
-python3 - "$REPORT" <<'PY'
-import json, sys
-report = json.load(open(sys.argv[1]))
-print(f"REWARD {report['score']:.4f}")
-print(f"BINARY_PASS {str(report['binary_pass']).lower()}")
-PY
-
-exit $STATUS
+echo
+if [ "$STATUS" -eq 0 ]; then
+    echo "verifier: PASS"
+else
+    echo "verifier: FAIL (exit $STATUS)"
+fi
+exit "$STATUS"

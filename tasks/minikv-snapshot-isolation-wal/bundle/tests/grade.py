@@ -26,6 +26,13 @@ from pathlib import Path
 from typing import Dict, List
 
 HERE = Path(__file__).resolve().parent
+IMPL_ROOT = Path(os.environ.get("IMPL_ROOT", "/app"))
+LOG_DIR = Path(os.environ.get("LOG_DIR", "/logs"))
+
+# Continuous score in [0, 1]; the run passes when it reaches this. Declared in
+# task.toml as [verifier] pass_threshold and repeated here so the grader is
+# self-contained.
+PASS_THRESHOLD = 0.85
 
 # name -> (test file, weight, per-category wall-clock limit in seconds)
 #
@@ -41,13 +48,13 @@ HERE = Path(__file__).resolve().parent
 # you proportionally, and the multiplier keeps the reward continuous rather than
 # introducing a cliff.
 CATEGORIES = [
-    ("regression", "test_regression.py", 0.00, 60),
-    ("api", "test_api.py", 0.12, 120),
-    ("isolation", "test_isolation.py", 0.27, 150),
-    ("compaction", "test_compaction.py", 0.11, 240),
-    ("threads", "test_threads.py", 0.05, 150),
-    ("durability", "test_durability.py", 0.28, 240),
-    ("performance", "test_performance.py", 0.17, 420),
+    ("regression", "test_regression.py", 0.00, 25),
+    ("api", "test_api.py", 0.12, 40),
+    ("isolation", "test_isolation.py", 0.27, 40),
+    ("compaction", "test_compaction.py", 0.11, 100),
+    ("threads", "test_threads.py", 0.05, 50),
+    ("durability", "test_durability.py", 0.28, 75),
+    ("performance", "test_performance.py", 0.17, 120),
 ]
 MULTIPLIER_CATEGORIES = {"regression"}
 
@@ -59,10 +66,12 @@ TEST_FILES = [test_file for _name, test_file, _w, _t in CATEGORIES] + [
 # timeout, and a killed verifier reports nothing at all.  Cap the whole run
 # instead, so a partial score always reaches the report.
 #
-# 900 sits inside the bundle's 1200s [verifier] timeout_sec with 300s to spare.
-# Measured: the reference grades in ~4s and the untouched starting state - the
-# slowest thing that still finishes - in ~500s.
-DEFAULT_DEADLINE = 900.0
+# The per-category caps sum to 450s and the deadline is 480s, both inside the
+# bundle's 600s [verifier] timeout_sec, which is inside the draft's 1200s.
+# Measured: the reference grades in ~5s; the untouched starting state - the
+# slowest thing that still finishes - in ~250s once its two runaway categories
+# hit their caps.
+DEFAULT_DEADLINE = 480.0
 
 # Identifiers that only appear when an implementation is trying to notice it is
 # being tested, or is reaching outside the process for its behaviour.  Comments
@@ -247,6 +256,41 @@ def run_category(tree: Path, test_file: str, timeout: int) -> Dict:
 
 
 # ----------------------------------------------------------------------
+def clear_stale_rewards() -> None:
+    """Delete any reward artefact that existed before this run.
+
+    The agent can write to /logs. Without this, pre-creating reward.txt with
+    1.0 would be a way to be scored without solving anything.
+    """
+    for directory in (LOG_DIR, HERE):
+        for name in ("reward.txt", "score.txt", "score.json", "junit.xml"):
+            path = directory / name
+            try:
+                if path.exists():
+                    os.chmod(path, 0o644)
+                    path.unlink()
+            except OSError:
+                print(f"WARNING: could not clear a pre-existing {path}", flush=True)
+
+
+def publish_reward(report: Dict) -> None:
+    """Write the score everywhere the harness might read it."""
+    score = report["score"]
+    payloads = [
+        (LOG_DIR / "reward.txt", f"{score:.6f}\n"),
+        (LOG_DIR / "score.txt", f"{score:.6f}\n"),
+        (LOG_DIR / "score.json", json.dumps(report, indent=2)),
+        (HERE / "reward.txt", f"{score:.6f}\n"),
+    ]
+    for path, payload in payloads:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(payload)
+        except OSError as exc:
+            if path.parent == LOG_DIR:
+                print(f"WARNING: could not write {path} ({exc})", flush=True)
+
+
 def grade(submission: Path, deadline_seconds: float = DEFAULT_DEADLINE) -> Dict:
     report = {
         "task": "minikv-snapshot-isolation-wal",
@@ -330,21 +374,38 @@ def grade(submission: Path, deadline_seconds: float = DEFAULT_DEADLINE) -> Dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--submission", type=Path, default=Path("/app"))
-    parser.add_argument("--out", type=Path, default=Path("report.json"))
+    parser.add_argument("--submission", type=Path, default=IMPL_ROOT)
+    parser.add_argument("--out", type=Path, default=None)
     parser.add_argument("--deadline", type=float, default=DEFAULT_DEADLINE)
     args = parser.parse_args()
 
-    print(f"grading {args.submission}")
-    report = grade(args.submission.resolve(), args.deadline)
-    args.out.write_text(json.dumps(report, indent=2))
+    clear_stale_rewards()
 
+    print(f"implementation root: {args.submission}")
+    print(f"log dir:             {LOG_DIR}")
+    print()
+
+    report = grade(args.submission.resolve(), args.deadline)
+    report["threshold"] = PASS_THRESHOLD
+    report["passed"] = (
+        not report["integrity_error"] and report["score"] >= PASS_THRESHOLD
+    )
+    report["reward"] = report["score"]
+
+    publish_reward(report)
+    if args.out is not None:
+        args.out.write_text(json.dumps(report, indent=2))
+
+    print()
     if report["integrity_error"]:
         print(f"INTEGRITY VIOLATION: {report['integrity_error']}")
-    print(f"score       {report['score']:.4f}")
-    print(f"binary_pass {report['binary_pass']}")
-    print(f"report      {args.out}")
-    return 0 if report["binary_pass"] else 1
+    print("=" * 68)
+    print(f"SCORE: {report['score']:.4f}")
+    print(f"THRESHOLD: {PASS_THRESHOLD:.2f}")
+    print(f"BINARY_PASS: {str(report['binary_pass']).lower()}")
+    print(f"RESULT: {'PASS' if report['passed'] else 'FAIL'}")
+    print("=" * 68)
+    return 0 if report["passed"] else 1
 
 
 if __name__ == "__main__":

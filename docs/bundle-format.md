@@ -45,30 +45,83 @@ starting workspace next to the Dockerfile in `environment/`.
 
 ## `task.toml`
 
-Four tables. `[metadata]` carries name and identity; `[verifier]`, `[agent]` and
-`[environment]` carry grading, agent and sandbox configuration.
+**This shape is transcribed from an approved bundle, not inferred.** Guessing it
+cost two rejections; the second, "resource declaration mismatch", was a
+`network_mode` key in `[environment]`, which does not belong there.
 
 ```toml
 [metadata]
 name = "minikv-snapshot-isolation-wal"
+title = "minikv: snapshot-isolated transactions over a crash-safe write-ahead log"
 description = """..."""
-tags = ["python", "storage", "transactions"]
+tags = ["library-clone", "storage", "transactions", "python"]
+collection_family = "library_clone"      # snake_case here; title case in the form
+task_family = "feature_development"
+verifier_family = "programmatic"
+difficulty = "hard"
+expert_time_estimate_hours = 4
+version = "1.0.0"
 
 [agent]
 network_mode = "none"        # the rollout - "open" is refused here
-timeout_sec = 14400
+timeout_sec = 14000          # below the draft's envelope, never equal to it
 
 [verifier]
+entrypoint = "tests/test.sh"
 network_mode = "none"
-timeout_sec = 2400
+timeout_sec = 600            # below the draft's envelope
+reward_file = "/logs/reward.txt"
+pass_threshold = 0.85
 
 [environment]
-network_mode = "open"        # the image build - fetching packages is normal
+dockerfile = "environment/Dockerfile"
+build_context = "environment"
 cpus = 2
 memory_mb = 4096
 storage_mb = 8192
 gpus = 0
 ```
+
+Three things worth calling out, all of them things we got wrong by guessing:
+
+* **`[environment]` describes the build, not a network posture.** It declares
+  `dockerfile` and `build_context` and the four resource figures. An extra
+  `network_mode` there is rejected as *"resource declaration mismatch"*.
+* **`[metadata]` carries the families**, in `snake_case` — `library_clone`,
+  not `Library clone` — plus `title`, `difficulty`,
+  `expert_time_estimate_hours` and `version`.
+* **`[verifier]` declares the reward contract**: `entrypoint`, `reward_file` and
+  `pass_threshold`. The grader must actually write that file; see below.
+
+## The reward contract
+
+`[verifier] reward_file` is not decorative. The grader writes the numeric score
+to `/logs/reward.txt` (and, for good measure, `/logs/score.txt`,
+`/logs/score.json` and `/logs/junit.xml`), and exits 0 exactly when the score
+reaches `pass_threshold`. Two details matter:
+
+* **Delete stale reward artefacts before grading.** The agent can write to
+  `/logs`. A `reward.txt` containing `1.0`, left behind before the verifier
+  runs, is otherwise indistinguishable from a perfect score.
+* **The score is continuous and the threshold is below 1.0.** The approved task
+  uses `0.85`. Pick a threshold that cannot be reached without doing the core of
+  the work — check it against your category weights.
+
+## Locating things at runtime
+
+`test.sh` and `solve.sh` in the approved bundle do not assume a layout. They
+resolve `IMPL_ROOT` (default `/app`) and `LOG_DIR` (default `/logs`) from the
+environment, and search a list of candidate directories for the grader and the
+reference sources:
+
+```bash
+for candidate in "$HERE" /tests /app/tests /verifier "$HERE/.."; do
+    if [ -f "$candidate/grade.py" ]; then GRADER="$candidate"; break; fi
+done
+```
+
+Copy that habit. It costs five lines and removes a whole class of "worked
+locally, failed in the harness".
 
 ### Network posture is per phase, and the phases are read separately
 
@@ -131,9 +184,16 @@ the decisive held-out cases and the grading logic sealed under `tests/`. The
 agent should be able to self-check against the visible part and still be unable
 to overfit the hidden part. **Say which is which in `verificationStrategy`.**
 
-In this repository's task, the visible half is `environment/tests/test_basic.py`
-(13 tests, baked into the image, describing only behaviour that already exists)
-and the hidden half is all of `tests/` (117 tests plus the grader). The visible
+In this repository's task, the visible half is
+`environment/public_tests/test_basic.py` (13 tests, baked into the image,
+describing only behaviour that already exists) and the hidden half is all of
+`tests/` (117 tests plus the grader). **Name the visible directory
+`public_tests/`, not `tests/`** — the approved bundle does, and it keeps the
+agent's copy from ever being confused with the sealed suite the harness mounts.
+The Dockerfile also defensively `rm -rf`s `/app/tests`, `/app/solution`,
+`/app/Dockerfile` and `/app/task.toml` after the copy, so the verifier and the
+reference cannot be reachable from inside the container whatever the build
+context turns out to be. The visible
 half is also scored at weight zero, with its pass ratio multiplying the final
 score — see the nop-floor note
 in `verifier-patterns.md` for why.

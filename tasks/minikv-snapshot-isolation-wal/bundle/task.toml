@@ -1,30 +1,47 @@
 [metadata]
 name = "minikv-snapshot-isolation-wal"
+title = "minikv: snapshot-isolated transactions over a crash-safe write-ahead log"
 description = """
-Rebuild a small embedded key/value store's storage engine: snapshot-isolated
-transactions, an append-only write-ahead log that survives SIGKILL, recovery
-that degrades to a prefix of the commit history when the log is damaged, and a
-crash-safe checkpoint that reclaims space - under a throughput budget that rules
-out rewriting the database on every write.
+Rebuild the storage engine of a small embedded key/value store: snapshot-isolated
+transactions with first-committer-wins conflict detection, an append-only
+write-ahead log that survives SIGKILL, recovery that degrades to a prefix of the
+commit history when the log is damaged, and a crash-safe checkpoint that actually
+reclaims space -- all under a throughput budget that rules out rewriting the
+database on every write. Correct values are not enough: the grader kills the
+process mid-flight, damages the log at sixteen offsets, and forces the MVCC
+design with a single-threaded test that deadlocks any lock-based fake.
 """
-tags = ["python", "storage", "transactions", "concurrency", "crash-recovery"]
+tags = ["library-clone", "storage", "transactions", "crash-recovery", "python"]
+collection_family = "library_clone"
+task_family = "feature_development"
+verifier_family = "programmatic"
+difficulty = "hard"
+expert_time_estimate_hours = 4
+version = "1.0.0"
 
 [agent]
-# The phase the network policy governs. The task is fully offline.
+# The rollout is fully sealed: everything the task needs is baked into the image.
 network_mode = "none"
-timeout_sec = 14400          # 4h, matching the expert estimate; >= the 7200s floor
+# Deliberately below the draft's 14400s envelope; the bundle must never ask for
+# more than the draft declares.
+timeout_sec = 14000
 
 [verifier]
+entrypoint = "tests/test.sh"
 network_mode = "none"
-# Kept at the form's default. Every number here is checked against the draft
-# the platform stored, which you cannot read back from this repo - so never ask
-# for more than the default unless you are certain the raised value was saved.
-timeout_sec = 1200           # grade.py holds its own 900s deadline inside this
+# The suite takes ~5s against the reference and ~240s against the untouched
+# starting state -- the slowest thing that still finishes. 600s sits well below
+# the draft's 1200s envelope, and grade.py holds its own 480s deadline inside it.
+timeout_sec = 600
+# Continuous, weighted score in [0, 1]; written to /logs/reward.txt and
+# /logs/score.json. Exit status 0 means the score reached the threshold.
+reward_file = "/logs/reward.txt"
+pass_threshold = 0.85
 
 [environment]
-# Image build. Fetching the base image, apt packages and pytest happens here.
-network_mode = "open"
-cpus = 2                     # 2000 cpuMillis in the draft
+dockerfile = "environment/Dockerfile"
+build_context = "environment"
+cpus = 2
 memory_mb = 4096
 storage_mb = 8192
 gpus = 0

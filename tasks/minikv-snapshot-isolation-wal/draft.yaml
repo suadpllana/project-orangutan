@@ -78,8 +78,9 @@ objective: |
      without spurious conflicts; and a transaction must keep seeing a consistent
      snapshot while other threads commit.
 
-  Done looks like: the 13 visible tests in `/app/tests` still pass, and the
-  sealed suite — 117 tests across seven categories — passes in full.
+  Done looks like: the 13 visible tests in `/app/public_tests` still pass, and
+  the sealed suite — 117 tests across seven categories — reaches the 0.85 pass
+  threshold; the reference reaches 1.0000.
 
   Constraints: Python 3.11 standard library only, no network, and every file the
   agent adds or changes must live inside `/app/minikv/` — grading copies
@@ -176,10 +177,18 @@ environmentSummary: |
       exception hierarchy, already complete and depended on by callers),
       `store.py` (the naive whole-file-rewrite implementation), `txn.py` (stubs
       raising `NotImplementedError`).
-    - `tests/test_basic.py` — 13 visible tests covering the behaviour that
-      already exists. This is the public half of the verifier: it tells the
+    - `public_tests/test_basic.py` — 13 visible tests covering the behaviour
+      that already exists. This is the public half of the verifier: it tells the
       agent what must not regress, and the grader re-runs its own pristine copy.
+      It lives under `public_tests/` rather than `tests/` so it can never be
+      confused with the sealed suite the harness mounts.
+    - `SPEC.md` — the same normative specification as `instruction.md`, in the
+      tree so the agent can grep it.
     - `README.md` — orientation for the package.
+  * The image is built from `environment/` as the build context (`COPY . /app/`),
+    then the Dockerfile defensively removes anything that must not be reachable
+    from inside the container and asserts the starting tree is intact, the
+    visible suite passes, and the transactional API is still missing.
   * `instruction.md` carries the full normative specification: types and
     validation, the autocommit and transactional APIs, `stats()`, snapshot
     isolation and conflict rules, durability, damaged-log recovery, checkpoint
@@ -274,8 +283,10 @@ verificationStrategy: |
   files, the crash-scenario helper, and all the grading logic. None of it is in
   the image the agent works in.
 
-  `tests/test.sh` is the entrypoint. It calls `tests/grade.py`, which never
-  executes anything from inside `/app`:
+  `tests/test.sh` is the entrypoint declared in `task.toml`. It resolves
+  `IMPL_ROOT` (default `/app`) and `LOG_DIR` (default `/logs`), locates the
+  sealed suite whichever way the harness laid it out, and calls `grade.py`,
+  which never executes anything from inside `/app`:
 
   1. **Collect.** Copy `minikv/**/*.py` out of `/app` into a scratch tree the
      grader owns, skipping `__pycache__` and dropping any `conftest.py` found
@@ -296,15 +307,21 @@ verificationStrategy: |
      costs one category instead of the run — which matters, because forcing a
      deadlock is the point of one of the isolation tests. Results are parsed
      from JUnit XML, not scraped from stdout.
-  4. **Budget.** Each category has a wall-clock limit (60–420 s; the reference
-     needs under 1.5 s for any of them) and the run as a whole has a 900 s
-     deadline inside the 1200 s verifier timeout. Categories run
+  4. **Budget.** Each category has a wall-clock limit (25–120 s; the reference
+     needs under 2 s for any of them) summing to 450 s, and the run as a whole
+     has a 480 s deadline inside the bundle's 600 s verifier budget, itself
+     inside the draft's 1200 s envelope. Categories run
      cheapest-and-most-diagnostic first, so a submission that hangs late still
      produces a useful report, and reaching the deadline marks the remainder
      unrun rather than killing the verifier.
-  5. **Report.** Write JSON with per-category pass counts, per-test failure
-     messages, timings, the weighted score and the binary verdict, and echo
-     `REWARD` and `BINARY_PASS` lines to stdout.
+  5. **Report.** Before anything else, delete any pre-existing `reward.txt`,
+     `score.txt`, `score.json` or `junit.xml` in `/logs` — the agent can write
+     there, and a pre-seeded reward would otherwise be mistaken for this run's
+     result. At the end, write the score to `/logs/reward.txt`,
+     `/logs/score.txt` and `/logs/score.json` (per-category pass counts,
+     per-test failure messages, timings, the weighted score and the verdict),
+     and print `SCORE`, `THRESHOLD` and `RESULT`. Exit status is 0 exactly when
+     the score reaches the 0.85 threshold.
 
   The seven categories grade the objective from independent angles — public
   behaviour, internal invariants under crash, resource bounds, concurrency, and
@@ -345,21 +362,21 @@ verificationStrategy: |
 
 # ------------------------------------------------------------ scoring & exploits
 binarySuccessCondition: |
-  Pass, if and only if all four hold:
+  The weighted score written to `/logs/reward.txt` must reach the
+  **0.85 pass threshold** declared in `task.toml`, and the integrity scan must
+  find no violation. `tests/test.sh` exits 0 exactly in that case and 1
+  otherwise, and prints `SCORE`, `THRESHOLD` and `RESULT` lines.
 
-  1. The integrity scan finds no violation — `/app/minikv/` exists with an
-     `__init__.py`, and no collected file references the test runner, the
-     environment or the call stack.
-  2. All 13 visible regression tests still pass, so the multiplier is 1.0.
-  3. Every one of the 117 tests in all seven categories passes. No category may
-     time out, and none may be left unrun by the global deadline. (`pytest`
-     skips count as passes; only two tests can skip, and only on an
-     implementation that keeps no log records to damage.)
-  4. The report records `score == 1.0`.
+  An integrity violation — a missing `minikv/__init__.py`, or a collected file
+  that references the test runner, the environment or the call stack — forces
+  the score to 0.0 and therefore fails regardless of test outcomes.
 
-  Anything else is a fail, including a submission that is correct but misses a
-  performance budget. `tests/test.sh` exits 0 on pass and 1 otherwise, and
-  prints `REWARD <score>` and `BINARY_PASS <true|false>`.
+  0.85 is reachable only by implementing the engine, not by covering breadth
+  cheaply: the two heaviest categories, `durability` (0.28) and `isolation`
+  (0.27), sum to 0.55, so a submission that skips either cannot clear the bar
+  even with everything else perfect. The reference scores 1.0000 with 117/117.
+  The report additionally records `binary_pass`, true only when every one of the
+  117 tests passes, which is the stricter line the reference actually clears.
 
 partialScoreStrategy: |
   Partial credit is the weighted mean of each scored category's pass ratio, so
@@ -402,6 +419,10 @@ partialScoreStrategy: |
   scores zero rather than being ignored. An integrity violation forces
   `score = 0.0` regardless of the rest, and a regression suite that cannot run
   at all drives the multiplier to 0.
+
+  The score is published to `/logs/reward.txt`, `/logs/score.txt` and
+  `/logs/score.json`; any pre-existing copy of those files is deleted before
+  grading starts.
 
   The weighting separates the plausible failure modes rather than collapsing
   them: transactions implemented but the whole-file-rewrite persistence kept
@@ -482,6 +503,10 @@ anticipatedExploits: |
     `api` category pins types, exception identity and the hierarchy, asserts the
     classes are the ones actually raised on a real conflict, and asserts that a
     rejected call leaves `commit_version` and the visible state untouched.
+  * **Pre-writing the reward.** The agent can write to `/logs`, so leaving a
+    `reward.txt` containing `1.0` would be scored without solving anything.
+    `grade.py` deletes every reward artefact in `/logs` and beside itself before
+    the first category runs, so only this run's number survives.
   * **Editing or deleting the instructions, the README or the visible tests** to
     make `/app` look finished. None of those files is read by the grader; only
     `minikv/**/*.py` is collected.

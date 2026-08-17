@@ -54,6 +54,37 @@ MAX_BUNDLE_BYTES = 512 * 1024 * 1024
 
 AGENT_NETWORK_MODES = {"none", "allowlist"}
 
+# The task.toml schema, transcribed from an APPROVED bundle. Keys the approved
+# task declares that we would otherwise have guessed at, and — just as
+# important — the one key it does NOT declare.
+METADATA_REQUIRED = [
+    "name",
+    "title",
+    "description",
+    "collection_family",
+    "task_family",
+    "verifier_family",
+    "expert_time_estimate_hours",
+]
+VERIFIER_REQUIRED = ["entrypoint", "network_mode", "timeout_sec", "reward_file",
+                     "pass_threshold"]
+ENVIRONMENT_REQUIRED = ["dockerfile", "build_context", "cpus", "memory_mb",
+                        "storage_mb", "gpus"]
+# `[environment]` declares the build, not a network posture. An approved bundle
+# has no network_mode here; putting one in gets "resource declaration mismatch".
+ENVIRONMENT_FORBIDDEN = ["network_mode"]
+
+# task.toml uses snake_case for the families; the draft form shows title case.
+BUNDLE_COLLECTION_FAMILIES = {
+    "library_clone", "product_clone", "ml_engineering", "algorithmic_optimization",
+}
+DRAFT_TO_BUNDLE_FAMILY = {
+    "Library clone": "library_clone",
+    "Product clone": "product_clone",
+    "ML engineering": "ml_engineering",
+    "Algorithmic optimization": "algorithmic_optimization",
+}
+
 # What the draft form ships with. Anything above these only reaches the platform
 # if your edit to the form was actually saved — and the bundle is compared
 # against the draft the platform STORED, which you cannot read back from here.
@@ -152,9 +183,73 @@ def check_quality(bundle: Path, config: dict | None, report: Report) -> None:
             report.error(f"{directory}/ is empty; the {label} cannot run")
 
 
+def check_schema(config: dict | None, report: Report) -> None:
+    """The table/key shape an approved bundle declares."""
+    if config is None:
+        return
+
+    metadata = config.get("metadata") or {}
+    for key in METADATA_REQUIRED:
+        if not metadata.get(key):
+            report.error(f"task.toml [metadata] is missing {key}")
+
+    family = metadata.get("collection_family")
+    if family is not None and family not in BUNDLE_COLLECTION_FAMILIES:
+        report.error(
+            f"task.toml [metadata] collection_family={family!r} must be one of "
+            f"{sorted(BUNDLE_COLLECTION_FAMILIES)} (snake_case in the bundle, "
+            f"even though the draft form shows title case)"
+        )
+
+    verifier = config.get("verifier") or {}
+    for key in VERIFIER_REQUIRED:
+        if verifier.get(key) is None:
+            report.error(f"task.toml [verifier] is missing {key}")
+    threshold = verifier.get("pass_threshold")
+    if isinstance(threshold, (int, float)) and not 0 < threshold <= 1:
+        report.error(f"task.toml [verifier] pass_threshold={threshold} must be in (0, 1]")
+    entrypoint = verifier.get("entrypoint")
+    if entrypoint is not None and entrypoint != "tests/test.sh":
+        report.warn(
+            f"task.toml [verifier] entrypoint={entrypoint!r}; the grader runs "
+            f"tests/test.sh"
+        )
+
+    environment = config.get("environment") or {}
+    for key in ENVIRONMENT_REQUIRED:
+        if environment.get(key) is None:
+            report.error(f"task.toml [environment] is missing {key}")
+    for key in ENVIRONMENT_FORBIDDEN:
+        if key in environment:
+            report.error(
+                f"task.toml [environment] declares {key}, which an approved "
+                f"bundle does not; that block describes the build, and an extra "
+                f"key there is rejected as 'resource declaration mismatch'"
+            )
+
+
 def check_cross(bundle: Path, config: dict | None, draft: dict, report: Report) -> None:
     if config is None:
         return
+
+    metadata = config.get("metadata") or {}
+    expected = DRAFT_TO_BUNDLE_FAMILY.get(draft.get("collectionFamily"))
+    actual = metadata.get("collection_family")
+    if expected and actual and expected != actual:
+        report.error(
+            f"task.toml collection_family={actual!r} does not correspond to the "
+            f"draft's {draft.get('collectionFamily')!r} (expected {expected!r})"
+        )
+    for toml_key, draft_key in (
+        ("task_family", "taskFamily"),
+        ("verifier_family", "verifierFamily"),
+    ):
+        if metadata.get(toml_key) and draft.get(draft_key):
+            if metadata[toml_key] != draft[draft_key]:
+                report.error(
+                    f"task.toml {toml_key}={metadata[toml_key]!r} disagrees with "
+                    f"the draft's {draft_key}={draft[draft_key]!r}"
+                )
 
     resources = draft.get("resourceEstimate") or {}
     environment = config.get("environment") or {}
@@ -250,6 +345,7 @@ def check(task_dir: Path) -> bool:
         return report.emit()
 
     config = check_structure(bundle, report)
+    check_schema(config, report)
     check_quality(bundle, config, report)
     check_size(bundle, report)
 

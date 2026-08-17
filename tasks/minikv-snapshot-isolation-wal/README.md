@@ -14,8 +14,9 @@ that rules out rewriting the database on every write.
 | expert estimate | 4 hours |
 | network | `none` (all phases except the image build) |
 | graded tests | 117 across 7 categories |
-| oracle | **1.0000**, binary pass, ~4 s |
-| nop (untouched `/app`) | **0.0000**, binary fail |
+| pass threshold | 0.85 (`[verifier] pass_threshold`) |
+| oracle | **1.0000**, PASS, ~5 s |
+| nop (untouched `/app`) | **0.0000**, FAIL |
 
 ## Layout
 
@@ -25,19 +26,21 @@ submission.md              generated; paste-ready render of draft.yaml
 bundle/                    exactly what gets zipped and uploaded
   task.toml                [metadata] [agent] [verifier] [environment]
   instruction.md           the problem statement + the normative specification
-  environment/
+  environment/             the build context; COPY . /app/
     Dockerfile             python:3.11-slim + pytest; builds /app
     minikv/                the naive storage engine + transaction stubs
-    tests/test_basic.py    13 visible tests - the public half of the verifier
+    public_tests/          13 visible tests - the public half of the verifier
+    SPEC.md                the spec again, in the tree
+    selfcheck.py           build-time assertion; deleted from the image
     README.md
   tests/                   sealed
-    test.sh                the verifier entrypoint the grader runs
-    grade.py               collection, integrity scan, category runner
+    test.sh                the verifier entrypoint declared in task.toml
+    grade.py               collection, integrity scan, category runner, reward
     test_*.py              the 117 held-out tests
     crash_child.py         the SIGKILL scenarios
   solution/
     solve.sh               the entrypoint the oracle runs
-    minikv/                the reference implementation
+    reference/minikv/      the reference implementation
 ```
 
 ## Reproducing the oracle & nop stage locally
@@ -46,16 +49,18 @@ bundle/                    exactly what gets zipped and uploaded
 cd bundle
 
 # oracle: install the reference into a copy of /app, then grade it
-mkdir -p /tmp/app && cp -r environment/minikv environment/tests /tmp/app/
-APP_DIR=/tmp/app bash solution/solve.sh
-SUBMISSION_DIR=/tmp/app bash tests/test.sh          # REWARD 1.0000
+mkdir -p /tmp/app /tmp/logs && cp -r environment/minikv environment/public_tests /tmp/app/
+IMPL_ROOT=/tmp/app bash solution/solve.sh
+IMPL_ROOT=/tmp/app LOG_DIR=/tmp/logs bash tests/test.sh    # SCORE: 1.0000, PASS
 
 # nop: grade the untouched starting state
-mkdir -p /tmp/nop && cp -r environment/minikv environment/tests /tmp/nop/
-SUBMISSION_DIR=/tmp/nop bash tests/test.sh          # REWARD 0.0000
+mkdir -p /tmp/nop && cp -r environment/minikv environment/public_tests /tmp/nop/
+IMPL_ROOT=/tmp/nop LOG_DIR=/tmp/logs bash tests/test.sh    # SCORE: 0.0000, FAIL
 
 docker build -t minikv-task environment/   # unverified here: no docker daemon
 ```
+
+The score lands in `$LOG_DIR/reward.txt`, `score.txt` and `score.json`.
 
 The image build has **not** been run in this repository's authoring environment
 (docker CLI present, no daemon). `environment/selfcheck.py` — the build-time
@@ -63,8 +68,8 @@ assertion that the seed is still the seed — was run directly instead, and it
 passes on the starting state and correctly refuses the reference. Build the
 image once before submitting.
 
-`tests/test.sh` exits 0 only on a binary pass and prints `REWARD` and
-`BINARY_PASS`.
+`tests/test.sh` exits 0 only when the score reaches the 0.85 threshold, and
+prints `SCORE`, `THRESHOLD` and `RESULT`.
 
 ## Design notes
 

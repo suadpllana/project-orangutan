@@ -28,13 +28,39 @@ docker build -t <slug> tasks/<slug>/bundle/environment/
       wrapper. Check the archive you are about to upload, not the directory it
       came from: `unzip -l dist/<slug>.zip | head`.
 
+## task.toml schema
+
+Transcribed from an approved bundle — see `docs/bundle-format.md`. Guessing any
+of this has already cost two rejections.
+
+- [ ] `[metadata]` declares `name`, `title`, `description`, `collection_family`,
+      `task_family`, `verifier_family`, `expert_time_estimate_hours` (plus
+      `difficulty`, `tags`, `version`).
+- [ ] The families are **snake_case** in the bundle (`library_clone`), title
+      case in the draft form (`Library clone`), and the two correspond.
+- [ ] `[verifier]` declares `entrypoint`, `network_mode`, `timeout_sec`,
+      `reward_file`, `pass_threshold`.
+- [ ] `[environment]` declares `dockerfile`, `build_context` and the four
+      resource figures — and **no `network_mode`**, which is what "resource
+      declaration mismatch" means.
+- [ ] The grader really writes `reward_file`, and exits 0 only at or above
+      `pass_threshold`.
+- [ ] The grader **deletes stale reward artefacts** before running; the agent
+      can write to `/logs`.
+- [ ] `test.sh` and `solve.sh` resolve `IMPL_ROOT` / `LOG_DIR` and search
+      candidate directories rather than assuming a layout.
+- [ ] The visible tests live in `public_tests/`, not `tests/`.
+- [ ] The Dockerfile `rm -rf`s `/app/tests`, `/app/solution`, `/app/Dockerfile`
+      and `/app/task.toml` after the copy.
+
 ## Resources and network
 
 - [ ] `agentTimeoutSec` ≥ 7,200 s (the long-horizon floor).
 - [ ] agent + verifier + build + teardown fits 50,400 s.
 - [ ] Nothing exceeds the sandbox envelope (8 CPUs / 65,536 MB / 40,960 MB).
-- [ ] `task.toml` `[environment]` asks for **less than or equal to** the draft —
-      never more — and the numbers still match after any edit.
+- [ ] `task.toml` timeouts are **strictly below** the draft's envelope, not
+      equal to it (the approved bundle uses 14000 against 14400, 600 against
+      1200). Resources may be equal — `gpus = 0` has to be.
 - [ ] Nothing in `task.toml` exceeds the **form defaults** (2000 cpuMillis,
       4096 MB, 8192 MB, 0 GPUs, 14400 s agent, 1200 s verifier) unless you have
       confirmed the raised value is saved in the form. Intake compares against

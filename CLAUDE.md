@@ -108,7 +108,7 @@ repository were round-trips that a rebuilt attachment would have closed in one.
 
 ---
 
-## The twelve rules
+## The fourteen rules
 
 Ordered by how much grief each one saves.
 
@@ -130,7 +130,14 @@ relative to the **archive root**; the guideline's `my-task/` diagram is the
 directory whose contents you zip. `build_bundle.py` now re-opens the ZIP and
 asserts the five paths before reporting success.
 
-**3. The draft you submitted is not the draft in your repo.** Intake compares
+**3. Ask the bundle for less than the draft declares, never the same.** The
+approved bundle asks for `timeout_sec = 14000` against a 14400 s draft envelope
+and `600` against 1200, with a comment saying exactly why. Equality is *legal*
+— `gpuCount: 0` against `gpus = 0` has to pass — but it leaves no room for the
+draft the platform stored to differ from the one in your repo, and that
+difference is invisible from here.
+
+**4. The draft you submitted is not the draft in your repo.** Intake compares
 every number in `task.toml` against the draft the platform *stored*, which you
 cannot read back from here. The minikv bundle was rejected with "verifier
 timeout exceeds draft" while `draft.yaml` and `task.toml` both said 2400 — the
@@ -142,12 +149,24 @@ bundle's asks at or below the **form defaults** — 2000 cpuMillis, 4096 MB,
 8192 MB, 0 GPUs, 14400 s agent, **1200 s verifier** — unless you have confirmed
 the raised value saved. Both validators now warn when you go above a default.
 
-**4. The tests are the task.** Prose is cheap to write and easy to make sound
+**5. Copy the schema from an approved bundle; never infer it.** `task.toml`'s
+shape is not derivable from the guideline prose. An approved bundle showed that
+`[environment]` declares `dockerfile` and `build_context` and **no**
+`network_mode` — the extra key is what "resource declaration mismatch" means;
+that `[metadata]` carries `title`, `difficulty`, `expert_time_estimate_hours`,
+`version` and the three families in `snake_case` (`library_clone`, not
+`Library clone`); and that `[verifier]` declares `entrypoint`, `reward_file` and
+`pass_threshold`, which the grader has to honour by writing
+`/logs/reward.txt` and exiting 0 only at or above the threshold. `docs/bundle-format.md`
+has the whole file. Every one of those was a guess before, and two of the
+guesses were rejections.
+
+**6. The tests are the task.** Prose is cheap to write and easy to make sound
 rigorous. A grader either separates a real solution from a plausible one or it
 does not, and the only way to find out is to run it against both. The spec and
 the grader are the work; the draft fields are the write-up.
 
-**5. Write the hidden tests before the reference solution.** Then run the
+**7. Write the hidden tests before the reference solution.** Then run the
 reference against them and expect it to fail. The minikv reference failed two
 tests on its first full run — one was a bug in a test, and **one was a real bug
 in the reference**: after recovering from a truncated log it appended new
@@ -155,7 +174,7 @@ records behind the damaged tail, where recovery would never look again. That
 would have shipped as a "correct" oracle. If your oracle passes first try,
 suspect the tests.
 
-**6. Both ends of the oracle & nop stage have to land.** The reference must
+**8. Both ends of the oracle & nop stage have to land.** The reference must
 reach (near) full reward. The untouched starting state must sit **at its floor**
 — and free credit is easy to ship by accident. Audit it by listing every test
 the seed *passes* and asking what work each one credits. Here that found four
@@ -165,40 +184,40 @@ a non-daemon timer fired during interpreter shutdown after the operation under
 test had already raised; and two throughput benchmarks measuring reads the naive
 store was already fast at. Together: 0.1785 of unearned reward, now 0.0000.
 
-**7. Partial credit is for attempts, not for the seed.** Continuous, monotone
+**9. Partial credit is for attempts, not for the seed.** Continuous, monotone
 scoring makes a task far more useful than an all-or-nothing gate, so keep it —
 but earn it. Weight the categories that measure new capability, and give
 "did not break what already worked" weight zero, letting its pass ratio multiply
 the result — free reward removed, cliff avoided.
 
-**8. Close the obvious shortcut with a different requirement than the one it
+**10. Close the obvious shortcut with a different requirement than the one it
 dodges.** In minikv, "rewrite a snapshot on every commit" satisfies every
 correctness test and dies on the throughput budget. Interacting constraints are
 what make difficulty real instead of a matter of typing volume. A task whose
 requirements are independent is a checklist, not a problem.
 
-**9. Force the design, don't just check the output.** The usual way to fake
+**11. Force the design, don't just check the output.** The usual way to fake
 transaction isolation is one lock held from `begin()` to `commit()`, and it
 looks perfect under any concurrent test. A *single-threaded* test that
 interleaves outside writes deadlocks the fake and answers correctly for the real
 thing. Generalise: if a wrong design is only distinguishable by timing, find the
 call sequence where it stops making progress instead.
 
-**10. Test the ceiling as well as the floor.** Snapshot isolation must *allow*
+**12. Test the ceiling as well as the floor.** Snapshot isolation must *allow*
 write skew, so a serializable implementation is wrong for that spec even though
 it sounds stronger. Without a test asserting the permitted anomaly is permitted,
 "reach for the strongest-sounding guarantee" is a winning strategy and the
 grader is measuring vocabulary. Every negative assertion also needs a positive
 twin: "no corrupt data appears" is satisfied by an empty database.
 
-**11. Assert structural properties, not byte layouts.** The recovery tests do not
+**13. Assert structural properties, not byte layouts.** The recovery tests do not
 know the log format. They damage the file and assert the recovered state is a
 *prefix* of the commit history — no gaps, no invented entries, every value
 checked against its key. Strong, format-agnostic, and it leaves the author free
 to design the encoding. Size bounds get the same treatment: `≤ 4 * live_bytes +
 65536`, never an absolute number that encodes your own constants.
 
-**12. Make cheating structurally impossible, not merely forbidden.** Copy only
+**14. Make cheating structurally impossible, not merely forbidden.** Copy only
 implementation files into a scratch tree the grader owns and run there; that one
 decision kills `conftest.py` injection, `sitecustomize.py`, `pytest.ini`
 deselection and edits to the visible tests, all at once. Then forbid it in
