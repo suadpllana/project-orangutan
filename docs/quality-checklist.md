@@ -125,6 +125,18 @@ docker build -t <slug> tasks/<slug>/bundle/environment/
 - [ ] `anticipatedExploits` names a countermeasure for every exploit listed.
 - [ ] `notes` records anything you deviated from the defaults on, and why.
 
+## After a fix, before you stop
+
+- [ ] `build_bundle.py` re-run, so `dist/<slug>.zip` reflects the change.
+- [ ] Oracle re-verified through `solve.sh` + `test.sh` after the change, not
+      just before it.
+- [ ] Committed and pushed.
+- [ ] **The rebuilt ZIP handed back to the user.** `dist/` is gitignored and the
+      container is ephemeral — an unsent artifact means the fix cannot be
+      uploaded.
+- [ ] Said in one line whether the draft needs editing too, or whether the
+      bundle change alone is enough.
+
 ## Novelty and honesty
 
 - [ ] The task is not a re-skin of an existing one or a well-known exercise.

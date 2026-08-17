@@ -83,6 +83,29 @@ prints `REWARD <score>` and `BINARY_PASS <true|false>`.
   than intentions.
 * Only `notes` and `schema_version` in `draft.yaml` are not form fields.
 
+## After every fix, ship the artifact
+
+A fix that only exists in the repository has not been delivered. Whenever you
+change anything under `tasks/<slug>/bundle/` — the grader, the spec, `task.toml`,
+the environment, the reference — finish the job:
+
+```bash
+python3 tools/validate_draft.py --all
+python3 tools/check_bundle.py --all
+python3 tools/render_submission.py --all
+python3 tools/build_bundle.py --all        # rebuilds dist/<slug>.zip
+```
+
+then **re-verify the oracle**, commit, push, and **hand the rebuilt
+`dist/<slug>.zip` back to the user in the same reply**. `dist/` is gitignored and
+the session container is ephemeral, so the ZIP is not recoverable from the repo
+— if you do not send the file, the user has nothing to upload and the fix is
+worthless to them. Say in one line what changed and whether the draft needs
+editing too.
+
+This is not optional and it is not "if they ask". Two rejections in this
+repository were round-trips that a rebuilt attachment would have closed in one.
+
 ---
 
 ## The twelve rules
