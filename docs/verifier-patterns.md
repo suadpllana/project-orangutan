@@ -80,6 +80,15 @@ outcome = run_category(tree, test_file, min(timeout, remaining))
 Order categories cheapest-and-most-diagnostic first, so a submission that hangs
 late still produces a report that explains why.
 
+Size the deadline against the *bundle's* `[verifier] timeout_sec`, and that
+against `verifierTimeoutSec` — three nested budgets, each comfortably inside the
+next, and never above the form default at the outer end. minikv runs a 900 s
+internal deadline inside the bundle's 1200 s `[verifier] timeout_sec`, which is
+exactly `verifierTimeoutSec`'s 1200 s default. Pick the numbers from
+measurements at both ends: the reference grades in ~4 s and the untouched seed —
+the slowest thing that still finishes — in ~500 s. The per-category limits are
+allowed to sum above the deadline; that is what the deadline is for.
+
 ## Crash testing: a child that kills itself
 
 ```python

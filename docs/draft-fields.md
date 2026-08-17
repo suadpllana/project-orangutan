@@ -82,7 +82,18 @@ ranges:
 
 Your bundle's `task.toml` `[environment]` block is checked against these numbers
 *and* against the draft: **it may ask for less, never more.** A value there that
-no longer matches the draft is rejected, not quietly ignored.
+no longer matches the draft is rejected, not quietly ignored. Equality is
+accepted — `gpuCount: 0` against `gpus = 0` has to pass, so the comparison
+cannot be strict.
+
+**The comparison is against the draft the platform stored, which you cannot read
+back.** The form's defaults are `cpuMillis 2000`, `memoryMb 4096`,
+`storageMb 8192`, `gpuCount 0`, `agentTimeoutSec 14400`, `verifierTimeoutSec
+1200`. If you raise one and the edit does not save, your bundle is rejected with
+"<field> exceeds draft" even though your own files agree with each other. Keep
+the bundle at or below the defaults unless you have confirmed the raise;
+`tools/validate_draft.py` and `tools/check_bundle.py` both warn when you go
+above one.
 
 `networkRequirements`:
 

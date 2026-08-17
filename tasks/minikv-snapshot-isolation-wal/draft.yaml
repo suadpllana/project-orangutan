@@ -204,7 +204,7 @@ resourceEstimate:
   storageMb: 8192
   gpuCount: 0
   agentTimeoutSec: 14400        # 4 h; above the 7200 s long-horizon floor
-  verifierTimeoutSec: 2400      # grade.py holds its own 2100 s deadline inside
+  verifierTimeoutSec: 1200      # the form default; grade.py deadlines at 900 s
 
 networkRequirements:
   mode: none
@@ -296,9 +296,9 @@ verificationStrategy: |
      costs one category instead of the run — which matters, because forcing a
      deadlock is the point of one of the isolation tests. Results are parsed
      from JUnit XML, not scraped from stdout.
-  4. **Budget.** Each category has a wall-clock limit (180–420 s; the reference
-     needs under 1.5 s for any of them) and the run as a whole has a 2100 s
-     deadline inside the 2400 s verifier timeout. Categories run
+  4. **Budget.** Each category has a wall-clock limit (60–420 s; the reference
+     needs under 1.5 s for any of them) and the run as a whole has a 900 s
+     deadline inside the 1200 s verifier timeout. Categories run
      cheapest-and-most-diagnostic first, so a submission that hangs late still
      produces a useful report, and reaching the deadline marks the remainder
      unrun rather than killing the verifier.
@@ -496,12 +496,18 @@ notes: |
 
   * Measured on this machine: oracle 1.0000 (117/117, ~4 s), nop 0.0000. The
     whole verifier run for a correct submission is about four seconds against a
-    2400 s timeout.
-  * `verifierTimeoutSec` is 2400 rather than the 1200 the form suggests, because
-    the per-category limits sum above 1200 in the worst case and a verifier the
-    harness kills reports nothing at all. `grade.py` enforces its own 2100 s
-    deadline so it always exits with a report in hand.
-  * Trial budget: agent 14400 s + verifier 2400 s + build (~2 min) is well
+    1200 s timeout.
+  * `verifierTimeoutSec` is the form's default 1200. An earlier revision raised
+    it to 2400 in this file and in `task.toml`, and the bundle was rejected with
+    "verifier timeout exceeds draft" — the platform compares `task.toml` against
+    the draft it stored, and the raised value evidently never reached it. The
+    lesson is in CLAUDE.md rule 3: the bundle's asks must hold against the draft
+    as submitted, which you cannot read back from this repository, so do not
+    exceed the form defaults without a reason. `grade.py` enforces its own 900 s
+    deadline inside the 1200 s, and the per-category limits (60–420 s) may sum
+    above it — the deadline absorbs that by design, marking later categories
+    unrun rather than letting the harness kill the verifier.
+  * Trial budget: agent 14400 s + verifier 1200 s + build (~2 min) is well
     inside the 50 400 s per-trial ceiling, and `agentTimeoutSec` clears the
     7200 s long-horizon floor.
   * `[environment] network_mode = "open"` in `task.toml` is the *build* phase,

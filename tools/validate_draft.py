@@ -79,6 +79,18 @@ BUILD_TEARDOWN_ALLOWANCE_SEC = 1_800
 
 MAX_ALLOWLIST_HOSTS = 100
 
+# What the form ships with. Raising one of these is fine, but the raise only
+# reaches the platform if the form edit saved — and your bundle is checked
+# against the STORED draft, which cannot be read back from this repository.
+FORM_DEFAULTS = {
+    "cpuMillis": 2000,
+    "memoryMb": 4096,
+    "storageMb": 8192,
+    "gpuCount": 0,
+    "agentTimeoutSec": 14400,
+    "verifierTimeoutSec": 1200,
+}
+
 
 class Report:
     def __init__(self, path: Path) -> None:
@@ -188,6 +200,16 @@ def check_resources(doc: dict, report: Report) -> None:
                 f"agent + verifier + ~{BUILD_TEARDOWN_ALLOWANCE_SEC}s for build and "
                 f"teardown is {trial}s, over the {TRIAL_POOL_CEILING_SEC}s per-trial "
                 f"ceiling"
+            )
+
+    for field, default in FORM_DEFAULTS.items():
+        value = resources.get(field)
+        if isinstance(value, int) and value > default:
+            report.warn(
+                f"resourceEstimate.{field}={value} is above the form default "
+                f"({default}). Confirm the raised value is saved in the form "
+                f"before uploading a bundle that relies on it — the intake "
+                f"compares task.toml against the stored draft, not this file."
             )
 
     hours = doc.get("expertTimeEstimateHours")

@@ -54,6 +54,29 @@ MAX_BUNDLE_BYTES = 512 * 1024 * 1024
 
 AGENT_NETWORK_MODES = {"none", "allowlist"}
 
+# What the draft form ships with. Anything above these only reaches the platform
+# if your edit to the form was actually saved — and the bundle is compared
+# against the draft the platform STORED, which you cannot read back from here.
+# A bundle asking for more than the default is a bet on that edit; a bundle at
+# or below the default always holds.
+FORM_DEFAULTS = {
+    "cpuMillis": 2000,
+    "memoryMb": 4096,
+    "storageMb": 8192,
+    "gpuCount": 0,
+    "agentTimeoutSec": 14400,
+    "verifierTimeoutSec": 1200,
+}
+# task.toml key -> (draft key, multiplier to reach the draft's unit)
+BUNDLE_TO_DRAFT = {
+    ("environment", "cpus"): ("cpuMillis", 1000),
+    ("environment", "memory_mb"): ("memoryMb", 1),
+    ("environment", "storage_mb"): ("storageMb", 1),
+    ("environment", "gpus"): ("gpuCount", 1),
+    ("agent", "timeout_sec"): ("agentTimeoutSec", 1),
+    ("verifier", "timeout_sec"): ("verifierTimeoutSec", 1),
+}
+
 
 class Report:
     def __init__(self, label: str) -> None:
@@ -186,6 +209,22 @@ def check_cross(bundle: Path, config: dict | None, draft: dict, report: Report) 
             f"task.toml [agent] network_mode={agent_mode!r} disagrees with the "
             f"draft's networkRequirements.mode={draft_mode!r}"
         )
+
+    # The bundle is compared against the stored draft, not the one in this repo.
+    # Asking for more than the form default only works if the form edit saved.
+    for (section, key), (draft_key, scale) in BUNDLE_TO_DRAFT.items():
+        bundle_value = (config.get(section) or {}).get(key)
+        if not isinstance(bundle_value, (int, float)):
+            continue
+        default = FORM_DEFAULTS[draft_key]
+        if bundle_value * scale > default:
+            report.warn(
+                f"task.toml [{section}] {key}={bundle_value} is above the form "
+                f"default for {draft_key} ({default}). The platform checks this "
+                f"against the draft it stored; if that edit did not save, the "
+                f"bundle is rejected with '{draft_key} exceeds draft'. Lower it, "
+                f"or confirm the raised value in the form before uploading."
+            )
 
     if (config.get("metadata") or {}).get("open_internet_justification"):
         if not (config.get("agent") or {}).get("network_mode"):

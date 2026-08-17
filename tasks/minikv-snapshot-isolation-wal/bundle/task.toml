@@ -16,7 +16,10 @@ timeout_sec = 14400          # 4h, matching the expert estimate; >= the 7200s fl
 
 [verifier]
 network_mode = "none"
-timeout_sec = 2400           # grade.py holds its own 2100s deadline inside this
+# Kept at the form's default. Every number here is checked against the draft
+# the platform stored, which you cannot read back from this repo - so never ask
+# for more than the default unless you are certain the raised value was saved.
+timeout_sec = 1200           # grade.py holds its own 900s deadline inside this
 
 [environment]
 # Image build. Fetching the base image, apt packages and pytest happens here.

@@ -41,12 +41,12 @@ HERE = Path(__file__).resolve().parent
 # you proportionally, and the multiplier keeps the reward continuous rather than
 # introducing a cliff.
 CATEGORIES = [
-    ("regression", "test_regression.py", 0.00, 180),
-    ("api", "test_api.py", 0.12, 240),
-    ("isolation", "test_isolation.py", 0.27, 300),
-    ("compaction", "test_compaction.py", 0.11, 300),
-    ("threads", "test_threads.py", 0.05, 300),
-    ("durability", "test_durability.py", 0.28, 420),
+    ("regression", "test_regression.py", 0.00, 60),
+    ("api", "test_api.py", 0.12, 120),
+    ("isolation", "test_isolation.py", 0.27, 150),
+    ("compaction", "test_compaction.py", 0.11, 240),
+    ("threads", "test_threads.py", 0.05, 150),
+    ("durability", "test_durability.py", 0.28, 240),
     ("performance", "test_performance.py", 0.17, 420),
 ]
 MULTIPLIER_CATEGORIES = {"regression"}
@@ -58,7 +58,11 @@ TEST_FILES = [test_file for _name, test_file, _w, _t in CATEGORIES] + [
 # Every category timing out at once would overrun the harness' verifier
 # timeout, and a killed verifier reports nothing at all.  Cap the whole run
 # instead, so a partial score always reaches the report.
-DEFAULT_DEADLINE = 2100.0
+#
+# 900 sits inside the bundle's 1200s [verifier] timeout_sec with 300s to spare.
+# Measured: the reference grades in ~4s and the untouched starting state - the
+# slowest thing that still finishes - in ~500s.
+DEFAULT_DEADLINE = 900.0
 
 # Identifiers that only appear when an implementation is trying to notice it is
 # being tested, or is reaching outside the process for its behaviour.  Comments

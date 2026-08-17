@@ -35,6 +35,13 @@ docker build -t <slug> tasks/<slug>/bundle/environment/
 - [ ] Nothing exceeds the sandbox envelope (8 CPUs / 65,536 MB / 40,960 MB).
 - [ ] `task.toml` `[environment]` asks for **less than or equal to** the draft —
       never more — and the numbers still match after any edit.
+- [ ] Nothing in `task.toml` exceeds the **form defaults** (2000 cpuMillis,
+      4096 MB, 8192 MB, 0 GPUs, 14400 s agent, 1200 s verifier) unless you have
+      confirmed the raised value is saved in the form. Intake compares against
+      the *stored* draft, not the one in your repo, and a raise that silently
+      failed to save shows up as "<field> exceeds draft".
+- [ ] The grader's own internal deadline is comfortably inside `task.toml`'s
+      `[verifier] timeout_sec`, which is inside `verifierTimeoutSec`.
 - [ ] `[agent] network_mode` is stated explicitly and is `none` or `allowlist`,
       and it agrees with `networkRequirements.mode`.
 - [ ] If `open_internet_justification` is set, `[agent] network_mode` is set too.
