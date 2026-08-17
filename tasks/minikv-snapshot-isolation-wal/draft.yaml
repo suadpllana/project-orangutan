@@ -1,0 +1,528 @@
+# Orangutan draft. Field names and bounds mirror the authoring guideline; see
+# docs/draft-fields.md. The bundle that pairs with this draft is in bundle/.
+#
+#   python3 tools/validate_draft.py --all      # bounds, enums, cross-checks
+#   python3 tools/check_bundle.py --all        # structure + quality-check stages
+#   python3 tools/render_submission.py --all   # regenerate submission.md
+#
+# Every number below was measured, not estimated.
+
+schema_version: 2
+
+# ----------------------------------------------------------------- identity
+title: "minikv: snapshot-isolated transactions over a crash-safe write-ahead log"
+workingSlug: minikv-snapshot-isolation-wal
+collectionFamily: "Library clone"
+taskFamily: feature_development
+verifierFamily: programmatic
+
+# --------------------------------------------------------------- what it is
+objective: |
+  `/app` holds `minikv`, a small embedded key/value store written in pure
+  Python. It works, but it is naive: every `put` rewrites the entire database
+  file, there is no way to group changes into an atomic unit, and a process that
+  dies mid-write leaves an unreadable file behind.
+
+  Rebuild its storage engine so that it satisfies the specification in
+  `instruction.md`. Concretely, the finished store must provide:
+
+  1. **Snapshot-isolated transactions.** `db.begin()` returns a `Transaction`
+     that reads a consistent snapshot of the committed state as of the moment
+     `begin()` was called, plus its own uncommitted writes. Later commits by
+     anyone else must be invisible to it, including for `scan()` — no phantoms.
+     Opening a transaction must not block other writers; a single-threaded test
+     opens a transaction, performs autocommit writes, and then reads through the
+     transaction, so an implementation that holds a lock for the transaction's
+     lifetime deadlocks.
+  2. **First-committer-wins conflict detection.** `commit()` raises
+     `ConflictError` when any key in the transaction's *write set* was written
+     after its snapshot was taken, by another transaction or by an autocommit
+     call. Conflicts are computed on the write set only: a transaction that
+     merely read a changed key still commits, so write skew is permitted and a
+     test asserts it is permitted. A failed commit discards the whole write set
+     and closes the transaction; using a closed transaction raises
+     `TransactionClosedError`. `Transaction` is also a context manager that
+     commits on a clean exit and rolls back on an exception.
+  3. **Durability against process death.** When `put`, `delete` or `commit()`
+     returns, the change must already have reached the operating system: a
+     `SIGKILL` on the next instruction must not lose it, and reopening the
+     directory must show it. Writes from a transaction that never committed must
+     never appear. The log must live in a single file named `wal.log` inside the
+     database directory and must be the mechanism by which committed data
+     reaches disk; its internal format is the author's choice.
+  4. **Recovery from a damaged log.** If `wal.log` is truncated at an arbitrary
+     offset or any single byte in it is flipped, reopening must not raise, and
+     the recovered state must be a *prefix* of the commit history: some commit
+     `j` such that everything up to `j` is fully applied and nothing after it is
+     applied even partially. Records therefore need a length and a checksum, and
+     recovery must stop at the first record that fails to verify. A store
+     reopened on a damaged log must also remain writable — new commits have to
+     land where recovery will find them.
+  5. **Checkpointing.** `db.checkpoint()` folds the log into a compact
+     representation. Afterwards `wal.log` must still exist and be at most 4 KiB,
+     and the whole directory must be at most `4 * L + 65536` bytes where `L` is
+     the sum of `len(key) + len(value)` over live keys — superseded versions and
+     deleted keys have to actually be reclaimed. Checkpointing must be crash-safe
+     (a `SIGKILL` during it cannot lose committed data) and must not change what
+     an already-open transaction sees.
+  6. **Throughput.** With 16-byte keys and 96-byte values: 20 000 autocommit
+     `put`s in under 20 s; 20 000 random `get`s after a `checkpoint()` in under
+     5 s; 50 prefix scans over 20 000 keys through a transaction whose snapshot
+     is already stale, in under 10 s; 2 000 single-write transactions in under
+     10 s; and reopening a 10 000-commit log in under 15 s. Reads must stay fast
+     on both paths — post-checkpoint and against an older snapshot — rather than
+     degrading into a per-key search.
+  7. **Thread safety.** One `MiniKV` object shared by 8 threads doing autocommit
+     writes to disjoint keys must lose, duplicate and corrupt nothing; threads
+     each opening their own transaction over disjoint keys must all commit
+     without spurious conflicts; and a transaction must keep seeing a consistent
+     snapshot while other threads commit.
+
+  Done looks like: the 13 visible tests in `/app/tests` still pass, and the
+  sealed suite — 117 tests across seven categories — passes in full.
+
+  Constraints: Python 3.11 standard library only, no network, and every file the
+  agent adds or changes must live inside `/app/minikv/` — grading copies
+  `minikv/**/*.py` into a clean tree and discards everything else, including any
+  edits to the visible tests. The store must not consult the environment, the
+  process tree, the call stack or test-runner state.
+
+motivation: |
+  Storage engines are where "looks correct" and "is correct" diverge the most.
+  Snapshot isolation, write-ahead logging and crash recovery are the three ideas
+  every real database is built on, and each of them has a plausible-looking wrong
+  version that passes a casual test suite: a snapshot that silently tracks the
+  latest state, a "durable" write that is still sitting in a Python buffer, a
+  recovery loop that resynchronises past a corrupt record and resurrects a commit
+  that was never made. An agent that can only pattern-match on the vocabulary
+  will write all three.
+
+  The scenario is ordinary professional work rather than a puzzle. There is a
+  real package with a real public API, callers that depend on its exception
+  names, an existing test suite that must keep passing, and a performance budget
+  that rules out the obvious shortcut — the situation an engineer is in when a
+  component that was "fine for now" has to become load-bearing. Getting it right
+  means holding an invariant across several files — version chains, conflict
+  windows, log framing, checkpoint ordering — and noticing where those
+  invariants interact, which is the capability worth measuring.
+
+# ------------------------------------------------------------------ effort
+difficultyExplanation: |
+  The individual techniques are textbook; the difficulty is that they constrain
+  each other, and only a design that satisfies all of them at once survives the
+  sealed suite.
+
+  * **MVCC is forced, not optional.** The obvious way to make transactions look
+    isolated is a lock held from `begin()` to `commit()`. The specification and
+    the matching test rule that out from a single thread: open a transaction,
+    run 50 autocommit writes, then read through the transaction. A held lock
+    deadlocks, and a "snapshot" that is really a live view returns the new
+    value. The agent has to keep per-key version chains and resolve reads at a
+    version.
+  * **Conflict detection has to be exactly snapshot isolation.** Too weak and
+    lost updates slip through; too strong — validating the read set, as in
+    serializable snapshot isolation — and the write-skew test fails, because it
+    asserts that a pair of transactions reading each other's keys and writing
+    disjoint ones *both* commit. The suite tests both directions, so an agent
+    that reaches for the strongest-sounding algorithm loses.
+  * **Durability is tested by actually killing the process.** Child processes
+    `SIGKILL` themselves and the parent asserts the child died by signal 9;
+    buffered writes with no `flush()` vanish, `close()` never runs, and any
+    design that persists on close or at exit scores zero here.
+  * **Damaged-log recovery is the part that is easy to get subtly wrong.** The
+    suite truncates the log at eight fractions and flips a byte at eight
+    positions, then asserts the recovered state is a prefix of the commit
+    history — no invented keys, no wrong values, no gaps. That needs per-record
+    length *and* checksum, stopping at the first bad record rather than
+    resynchronising, and a guard against a corrupted length field that would
+    otherwise drive a huge read. A further test writes to the store *after*
+    recovering from a truncated log and reopens again: an implementation that
+    appends behind the damaged tail loses the new write silently. That is a bug
+    the reference implementation actually had until the suite caught it.
+  * **Checkpointing has an ordering requirement.** Write the new snapshot
+    atomically, then truncate the log — the other order loses data if the
+    process dies between the two, and a crash test kills the process at a random
+    moment inside a checkpoint loop. Recovery then has to ignore log records
+    already folded into the snapshot, so versions must be comparable across the
+    two files. Pruning the in-memory version chains has its own constraint:
+    chains may only be trimmed below the oldest snapshot still held by an open
+    transaction, or `checkpoint()` corrupts a transaction that is mid-flight.
+  * **The performance budget removes the escape hatch.** Rewriting a snapshot
+    per commit satisfies every correctness test and misses the 20 000-put budget
+    by orders of magnitude. Append-only is effectively mandatory, which is what
+    makes the recovery requirements bite.
+  * **The visible tests do not describe the target.** They cover what the store
+    already does. An agent that treats the shipped suite as the definition of
+    done writes nothing at all and scores its floor; the specification is the
+    only description of the work.
+  * **It is nevertheless bounded.** Single process, no `fsync` semantics to
+    reason about, no range locking, no distributed anything, about 500 lines of
+    Python in the reference, and a specification that states every requirement
+    the grader checks. An expert who knows the material writes it in about four
+    hours, most of it on recovery and checkpoint ordering.
+
+expertTimeEstimateHours: 4
+
+# ------------------------------------------------------- environment & resources
+environmentSummary: |
+  A single container, offline at runtime, no GPU.
+
+  * Base image: `python:3.11-slim` (Debian bookworm). Python 3.11 and the
+    standard library; `git` and `pytest==9.1.1` are baked into the image by
+    `environment/Dockerfile`. Nothing else is installed and there is no package
+    index reachable during the rollout.
+  * `/app` is the working tree, a git repository with one commit:
+    - `minikv/` — the package: `__init__.py` (public exports), `errors.py` (the
+      exception hierarchy, already complete and depended on by callers),
+      `store.py` (the naive whole-file-rewrite implementation), `txn.py` (stubs
+      raising `NotImplementedError`).
+    - `tests/test_basic.py` — 13 visible tests covering the behaviour that
+      already exists. This is the public half of the verifier: it tells the
+      agent what must not regress, and the grader re-runs its own pristine copy.
+    - `README.md` — orientation for the package.
+  * `instruction.md` carries the full normative specification: types and
+    validation, the autocommit and transactional APIs, `stats()`, snapshot
+    isolation and conflict rules, durability, damaged-log recovery, checkpoint
+    size bounds, the performance table, threading, and the implementation
+    constraints.
+  * Storage layout: a database is a directory. The only filename the
+    specification fixes is `wal.log`. `data.json`, written by the starting
+    implementation, is explicitly not part of the contract.
+  * Resources: 2 CPU cores, 4 GiB RAM, 8 GiB disk — comfortably inside the
+    sandbox's 8 CPU / 64 GiB / 40 GiB envelope. The heaviest graded workload is
+    20 000 keys of ~112 bytes, which peaks in the low tens of megabytes.
+  * Durability model: process failure (`SIGKILL`), not machine failure. Bytes
+    handed to the kernel count as durable, so `flush()` is sufficient and no
+    `fsync` is required. This is stated in the specification so the performance
+    budgets are not secretly a measurement of fsync latency on the grading host.
+  * The verifier runs in the same image after the agent stops, from `tests/`,
+    which is not present in the image the agent works in.
+
+resourceEstimate:
+  cpuMillis: 2000
+  memoryMb: 4096
+  storageMb: 8192
+  gpuCount: 0
+  agentTimeoutSec: 14400        # 4 h; above the 7200 s long-horizon floor
+  verifierTimeoutSec: 2400      # grade.py holds its own 2100 s deadline inside
+
+networkRequirements:
+  mode: none
+  hosts: []
+  justification: |
+    The task is fully offline. Python 3.11, git and pytest are baked into the
+    image at build time, the store is standard-library-only by specification,
+    and every graded workload is generated inside the sandbox. Nothing the agent
+    or the verifier does needs to leave the container, which also makes grading
+    deterministic.
+
+# ----------------------------------------------------------- oracle & verification
+oracleStrategy: |
+  `solution/solve.sh` copies the reference package over `/app/minikv` and then
+  imports it, opens a store, runs a transaction and a checkpoint, so a broken
+  drop-in fails loudly in the oracle step rather than silently in the verifier.
+
+  The reference is `solution/minikv/`, about 500 lines across four modules,
+  standard library only. It scores 1.0000 — 117/117 — in about four seconds.
+
+  * `wal.py` — framing shared by both on-disk files. Every record is
+    `[u32 payload_len][u32 crc32(payload)][payload]`; a commit payload is
+    `[u64 version][u32 count]` followed by `[u32 klen][u32 vlen][key][value]`
+    entries, with `vlen == 0xFFFFFFFF` marking a tombstone. `read_records`
+    returns the commits it could verify *and the offset just past the last good
+    one*, stopping at the first short frame, oversized length, checksum mismatch
+    or undecodable payload. That single return value is what gives both the
+    prefix property on recovery and the truncation point for reopening a damaged
+    log.
+  * `store.py` — `MiniKV` keeps `_latest` (the current committed value per live
+    key) for the fast path and `_versions` (an append-ordered chain of
+    `(version, value_or_None)` per key) for snapshot reads. `_commit_version` is
+    a monotonic counter; `begin()` records it and registers the snapshot in an
+    active-snapshot `Counter`. Commit takes the store lock, checks that no key in
+    the write set has a chain entry newer than the snapshot, appends one framed
+    record, `flush()`es it, applies it in memory and bumps the counter. Reads at
+    the current version hit `_latest`; older snapshots walk the chain.
+  * `txn.py` — `Transaction` holds only a snapshot number and a write dict, so it
+    never holds a lock between calls and readers never block writers. `get`
+    checks the write set first, `scan` merges the snapshot view with the write
+    set applying tombstones, and any exception from commit aborts and closes the
+    transaction.
+  * Recovery — load `snapshot.dat` if present, replay `wal.log` skipping records
+    at or below the checkpoint version, then truncate the log to the last good
+    offset before reopening it for append. That last step is what makes a store
+    recovered from a damaged log writable again.
+  * `checkpoint()` — write `snapshot.dat.tmp` (magic plus one framed record
+    holding every live key at the current version), `os.replace` it over
+    `snapshot.dat`, then truncate `wal.log` back to its 8-byte header. Atomic
+    rename first, truncate second, so a crash in between only replays records
+    the snapshot already contains. Finally prune version chains below
+    `min(checkpoint_version, oldest_open_snapshot)` so open transactions keep
+    seeing their snapshot.
+
+  Durability is `flush()`, not `fsync()`, matching the stated process-failure
+  model. Thread safety is a single `RLock` around the store's mutating and
+  reading paths; transactions hold nothing between calls.
+
+verificationStrategy: |
+  **Visible half.** `/app/tests/test_basic.py` ships in the image: 13 tests over
+  get/put/delete/scan, reopen, validation and idempotent close. It tells the
+  agent what "do not regress" means and is something to self-check against. It
+  is deliberately *not* a description of the target — it covers only behaviour
+  that already exists — and `instruction.md` says so explicitly.
+
+  **Sealed half.** Everything under `tests/` is held out: 117 tests in seven
+  files, the crash-scenario helper, and all the grading logic. None of it is in
+  the image the agent works in.
+
+  `tests/test.sh` is the entrypoint. It calls `tests/grade.py`, which never
+  executes anything from inside `/app`:
+
+  1. **Collect.** Copy `minikv/**/*.py` out of `/app` into a scratch tree the
+     grader owns, skipping `__pycache__` and dropping any `conftest.py` found
+     inside the package. Nothing outside `minikv/` is copied, so a `conftest.py`,
+     `sitecustomize.py`, `pytest.ini` or edited visible test in `/app` has no
+     effect. A missing `minikv/__init__.py` is an integrity failure.
+  2. **Integrity scan.** Tokenise each collected file and inspect `NAME` tokens
+     only — comments and string literals are excluded, so documentation is free.
+     Referencing `pytest`, `unittest`, `PYTEST_CURRENT_TEST`, `sys._getframe`,
+     `inspect.currentframe`, `inspect.stack`, `traceback.extract_stack`,
+     `sys.argv`, `sys.modules`, `os.environ`, `os.getenv` or the trace hooks
+     zeroes the run. Ambiguous words (`stack`, `modules`, `argv`, `environ`)
+     only count when qualified by the matching module.
+  3. **Run.** Copy the grader's pristine tests next to the package and run each
+     category as its own pytest process with `cwd` and `PYTHONPATH` pointing at
+     the scratch tree, plus `-p no:cacheprovider`, `--rootdir`, `--confcutdir`
+     and `--junitxml`. Separate processes mean a deadlock or an infinite loop
+     costs one category instead of the run — which matters, because forcing a
+     deadlock is the point of one of the isolation tests. Results are parsed
+     from JUnit XML, not scraped from stdout.
+  4. **Budget.** Each category has a wall-clock limit (180–420 s; the reference
+     needs under 1.5 s for any of them) and the run as a whole has a 2100 s
+     deadline inside the 2400 s verifier timeout. Categories run
+     cheapest-and-most-diagnostic first, so a submission that hangs late still
+     produces a useful report, and reaching the deadline marks the remainder
+     unrun rather than killing the verifier.
+  5. **Report.** Write JSON with per-category pass counts, per-test failure
+     messages, timings, the weighted score and the binary verdict, and echo
+     `REWARD` and `BINARY_PASS` lines to stdout.
+
+  The seven categories grade the objective from independent angles — public
+  behaviour, internal invariants under crash, resource bounds, concurrency, and
+  cost — so a partial or lucky implementation cannot pass:
+
+  * `regression` (13) — the grader's own copy of the visible suite. Carries no
+    weight of its own; its pass ratio multiplies the final score.
+  * `api` (25) — types (`str`, `bytearray`, `memoryview`, `int`, `None` all
+    rejected on both the store and a transaction), empty-key and size limits,
+    "a rejected call changes nothing", `stats()` shape and fields, `wal_bytes`
+    agreeing with the real file size, post-`close()` behaviour, both context
+    managers, and that the raised exceptions really are the documented classes.
+  * `isolation` (30) — snapshot reads, the non-blocking `begin()` test, read
+    your own writes, invisibility of uncommitted writes, phantom-free `scan`,
+    scan/write-set merging, snapshots surviving a checkpoint, atomic commit,
+    first-committer-wins in both directions, autocommit-versus-transaction
+    conflicts, disjoint writes, read-only transactions never conflicting, write
+    skew being allowed, a conflict discarding the entire write set, closed and
+    aborted transaction handling, context-manager commit/rollback/conflict
+    propagation, and `commit_version` accounting.
+  * `compaction` (9) — log under 4 KiB and directory under `4L + 65536` after a
+    checkpoint over ~15 000 writes, contents preserved across checkpoint and
+    reopen, writes after a checkpoint durable, empty-database checkpoint,
+    repeated checkpoints stable, `commit_version` unchanged, an all-deleted
+    database collapsing to near nothing.
+  * `threads` (3) — 8 × 400 concurrent autocommit writes all durable and
+    recoverable, 8 threads × 100 transactions on disjoint keys with no spurious
+    conflicts, and concurrent readers observing a stable 200-key snapshot while
+    a writer runs 4 000 updates.
+  * `durability` (32) — a helper process runs a scenario and `SIGKILL`s itself,
+    then the parent reopens and compares: autocommit writes, committed
+    transactions, deletes, checkpoint-then-writes, six repetitions of a kill at
+    a random instant inside a checkpoint loop, and the negative cases where an
+    open or rolled-back transaction must leave no trace. Then eight truncation
+    fractions and eight single-byte corruptions, each asserting the prefix
+    property, plus write-after-recovery and reopen-preserves-`commit_version`.
+  * `performance` (5) — the five budgets from the specification.
+
+# ------------------------------------------------------------ scoring & exploits
+binarySuccessCondition: |
+  Pass, if and only if all four hold:
+
+  1. The integrity scan finds no violation — `/app/minikv/` exists with an
+     `__init__.py`, and no collected file references the test runner, the
+     environment or the call stack.
+  2. All 13 visible regression tests still pass, so the multiplier is 1.0.
+  3. Every one of the 117 tests in all seven categories passes. No category may
+     time out, and none may be left unrun by the global deadline. (`pytest`
+     skips count as passes; only two tests can skip, and only on an
+     implementation that keeps no log records to damage.)
+  4. The report records `score == 1.0`.
+
+  Anything else is a fail, including a submission that is correct but misses a
+  performance budget. `tests/test.sh` exits 0 on pass and 1 otherwise, and
+  prints `REWARD <score>` and `BINARY_PASS <true|false>`.
+
+partialScoreStrategy: |
+  Partial credit is the weighted mean of each scored category's pass ratio, so
+  the reward is continuous and monotone in how much of the specification is
+  actually implemented:
+
+  | category    | weight | what it measures                                   |
+  | ----------- | ------ | -------------------------------------------------- |
+  | durability  | 0.28   | crash recovery and damaged-log handling            |
+  | isolation   | 0.27   | snapshot semantics and conflict detection          |
+  | performance | 0.17   | the append-only design the budgets force           |
+  | api         | 0.12   | contract fidelity                                  |
+  | compaction  | 0.11   | real space reclamation                             |
+  | threads     | 0.05   | shared-object safety                               |
+  | regression  | 0.00   | **multiplier** — see below                          |
+
+  ```
+  raw   = sum(weight * passed/total) / sum(weight)
+  score = raw * (regression passed / regression total)
+  ```
+
+  rounded to four places.
+
+  `regression` deliberately carries no weight of its own. It re-runs the visible
+  suite, which the untouched starting state already passes; scoring it would
+  hand the nop run free reward instead of leaving it at its floor. Instead its
+  pass ratio multiplies the result, so breaking behaviour that already worked
+  costs proportionally rather than falling off a cliff, and the reward stays
+  continuous and monotone in both directions.
+
+  The scored categories were each audited so that no test in them passes without
+  some part of the new engine — including the two read benchmarks, which now run
+  after a `checkpoint()` and through a stale-snapshot transaction respectively.
+  That is why the untouched state scores 0.0000 while every intermediate stage
+  of a real attempt still earns credit.
+
+  A category that times out or is skipped for lack of verifier time contributes
+  its full weight to the denominator and zero to the numerator, so hanging is
+  never cheaper than failing, and a category whose tests fail to collect at all
+  scores zero rather than being ignored. An integrity violation forces
+  `score = 0.0` regardless of the rest, and a regression suite that cannot run
+  at all drives the multiplier to 0.
+
+  The weighting separates the plausible failure modes rather than collapsing
+  them: transactions implemented but the whole-file-rewrite persistence kept
+  lands near 0.50; durability and recovery right but isolation treated as
+  serializable loses the write-skew and read-only-conflict tests and lands near
+  0.96; an append-only log with no transactions lands near 0.45. Per-test
+  failure messages are kept in the report so those cases stay distinguishable
+  after the fact.
+
+anticipatedExploits: |
+  * **Detecting the grader.** Reading `PYTEST_CURRENT_TEST`, `sys.argv`,
+    `sys.modules`, `os.environ`, or walking the call stack to special-case
+    behaviour. Countered by the tokenised integrity scan, which zeroes the score
+    on any such reference in the collected package, and by the specification
+    stating the rule so a legitimate solution has no reason to trip it. Verified
+    both ways: a `sys.modules` check trips it, a docstring mentioning `pytest`,
+    `os.environ` and `sys.argv` does not.
+  * **Shipping code the grader was not meant to run.** A `conftest.py` that
+    monkeypatches assertions, a `sitecustomize.py` executed at interpreter
+    start, a `pytest.ini` that deselects tests, or edits to the visible
+    `tests/test_basic.py`. Countered by copying only `minikv/**/*.py` into a
+    grader-owned tree, dropping any `conftest.py` from inside the package,
+    grading against the grader's own copy of the visible suite, and running
+    pytest with `--rootdir`, `--confcutdir` and `-p no:cacheprovider`.
+  * **Overfitting the visible tests.** The shipped suite is the floor, not the
+    target: it describes only what the store already does, and passing it is
+    worth zero — it multiplies, it does not add. The 117 decisive cases are sealed in
+    `tests/` and never enter the image.
+  * **Faking durability by writing on `close()`.** Every crash scenario ends in
+    `SIGKILL`, so no `close()`, no `atexit`, no `__del__` and no finaliser ever
+    runs. The parent additionally asserts the child died with signal 9, so a
+    child that exits cleanly — by catching the kill, or by forking a survivor —
+    fails the test instead of passing it. The checkpoint-race scenario guards
+    its loop for the same reason: if `checkpoint()` raises, the child exits with
+    a status that is not signal 9, so a store with no `checkpoint()` cannot pass
+    on the strength of an armed timer firing during interpreter shutdown.
+  * **Faking snapshots with a lock.** Holding a lock from `begin()` to
+    `commit()` makes concurrent tests look isolated. The isolation tests are
+    single-threaded and interleave autocommit writes between `begin()` and the
+    read, so a held lock deadlocks and the category times out to zero.
+  * **Reaching for serializability instead.** Validating the read set makes
+    "isolation" sound stronger and passes the lost-update tests, but
+    `test_write_skew_is_allowed` asserts that the classic write-skew pair *both*
+    commit, and `test_read_only_transaction_never_conflicts` asserts a read-only
+    transaction always commits. Over-strictness is penalised as precisely as
+    under-strictness.
+  * **Hardcoding the fixtures.** Keys and values are generated, the performance
+    fixture uses 20 000 keys, and the crash scenarios live in a sealed helper.
+    There is no small fixed answer set to memorise.
+  * **Passing recovery by discarding the log.** Returning an empty database
+    after any damage satisfies the prefix property vacuously — so the suite also
+    asserts that a clean reopen sees all ten commits, that truncating one byte
+    leaves strictly fewer than ten (the tail really is lost, not the whole log),
+    and that a store recovered from a damaged log accepts new writes that are
+    still there after another reopen.
+  * **Resynchronising past a corrupt record.** Scanning forward for the next
+    valid-looking frame recovers "more" data and feels generous, but it
+    resurrects commits that must be invisible; the prefix assertion rejects any
+    gap in the recovered key sequence, and each surviving value is checked
+    against the key it belongs to.
+  * **Keeping the data somewhere other than the log.** The specification
+    requires `wal.log` to be the mechanism by which committed data reaches disk,
+    and the crash tests assert the file exists after recovery, so the naive
+    whole-file rewrite cannot collect durability credit.
+  * **`checkpoint()` as a no-op, or as a log copy.** Countered by two bounds
+    that must hold simultaneously: `wal.log` at most 4 KiB, and the whole
+    directory at most `4L + 65536` bytes after ~15 000 writes collapse to 2 000
+    live keys — a copy of the log fails the second, a no-op fails the first, and
+    the all-deleted test requires the directory to collapse below 64 KiB.
+  * **Checkpointing on every commit** to keep the log trivially small. Legal,
+    but it makes every write O(live set) and misses the 20 000-put budget by a
+    wide margin.
+  * **Keeping everything in memory and writing once at the end.** Fails every
+    `SIGKILL` scenario, and `test_reopen_is_not_quadratic` forces recovery of a
+    10 000-commit log to stay linear.
+  * **Weakening the API to dodge tests.** Accepting `str` keys, returning `None`
+    instead of raising, or redefining `ConflictError` as something looser. The
+    `api` category pins types, exception identity and the hierarchy, asserts the
+    classes are the ones actually raised on a real conflict, and asserts that a
+    rejected call leaves `commit_version` and the visible state untouched.
+  * **Editing or deleting the instructions, the README or the visible tests** to
+    make `/app` look finished. None of those files is read by the grader; only
+    `minikv/**/*.py` is collected.
+  * **Attempting to install a dependency or reach the network.** The rollout is
+    sealed and there is no package index; only the standard library is
+    importable, and an `ImportError` at collection time fails every category
+    rather than one.
+
+# ------------------------------------------------------------------- notes
+notes: |
+  Not a draft field. Authoring notes.
+
+  * Measured on this machine: oracle 1.0000 (117/117, ~4 s), nop 0.0000. The
+    whole verifier run for a correct submission is about four seconds against a
+    2400 s timeout.
+  * `verifierTimeoutSec` is 2400 rather than the 1200 the form suggests, because
+    the per-category limits sum above 1200 in the worst case and a verifier the
+    harness kills reports nothing at all. `grade.py` enforces its own 2100 s
+    deadline so it always exits with a report in hand.
+  * Trial budget: agent 14400 s + verifier 2400 s + build (~2 min) is well
+    inside the 50 400 s per-trial ceiling, and `agentTimeoutSec` clears the
+    7200 s long-horizon floor.
+  * `[environment] network_mode = "open"` in `task.toml` is the *build* phase,
+    which the guideline says is not gated; the rollout and the verifier are both
+    `none`. This is the one value in the bundle that could not be checked
+    against a published enum — flagged here rather than assumed correct.
+  * `regression` was moved to weight 0 and turned into a score multiplier after
+    measuring that the untouched workspace scored 0.1785 with it weighted. Three
+    other sources of free credit were closed at the same time: a checkpoint-race
+    scenario that passed on a store with no `checkpoint()` (an armed timer fired
+    during interpreter shutdown after the loop had already raised), four `api`
+    tests that never touched the transactional API, and two throughput
+    benchmarks that measured only reads the naive store was already fast at.
+    Together those took the nop from 0.1785 to 0.0000.
+  * The image build is **unverified**: this authoring environment has the docker
+    CLI but no daemon. The Dockerfile is deliberately conservative because of
+    that — the build-time self-check lives in `environment/selfcheck.py` rather
+    than a `RUN` heredoc, which the classic Dockerfile parser does not join
+    across newlines. `selfcheck.py` was run directly against both the seed (it
+    passes) and the reference (it correctly refuses). Build the image once
+    before submitting.
+  * `bundle/environment/tests/test_basic.py` and `bundle/tests/test_regression.py`
+    must stay identical below their docstrings — the second is the sealed copy
+    the grader runs. Diff them after touching either.

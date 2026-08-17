@@ -1,7 +1,7 @@
 # Verifier patterns
 
 Reusable mechanics for programmatic graders. Every pattern here is in
-`tasks/minikv-snapshot-isolation-wal/verifier/` and has been run.
+`tasks/minikv-snapshot-isolation-wal/bundle/tests/` and has been run.
 
 ---
 
@@ -182,6 +182,66 @@ runs the whole performance category in 0.9 s against budgets summing to 60 s,
 while the seed does not finish it at all. A budget that a correct-but-slow
 submission fails on a busy grading host is a flaky test, and a flaky test in a
 grader is worse than a missing one.
+
+## Drive the nop run to the floor
+
+The funnel runs your verifier against the *untouched* starting state and expects
+it to sit at its floor. Partial credit is still wanted — but it has to be credit
+for work the agent did, not credit the seed was born with. Audit this by
+running the grader against a pristine `/app` and looking at every test that
+passes.
+
+Three sources of free credit, all of them found this way:
+
+* **A regression category with weight.** Re-running the visible suite is worth
+  having — breaking existing behaviour should be disqualifying — but the seed
+  passes it by definition. Give it weight `0` and let its pass ratio *multiply*
+  the final score: passing it earns nothing, breaking it costs proportionally,
+  and the reward stays continuous instead of falling off a cliff.
+* **Tests that never touch the new API.** Four `api` tests here checked the
+  exception hierarchy, directory creation, size limits and the context manager —
+  all true of the starting store. Folding a transactional assertion into each
+  one keeps the coverage and removes the free pass.
+* **A crash scenario that dies for the wrong reason.** The checkpoint-race child
+  armed a `threading.Timer` and then looped on `checkpoint()`. On a store with
+  no `checkpoint()` the loop raised immediately, but the non-daemon timer still
+  fired during interpreter shutdown, so the process died by SIGKILL and the
+  parent was satisfied. Six free passes. The fix is to guard the loop and
+  `os._exit` with a status that is *not* signal 9:
+
+  ```python
+  timer = threading.Timer(delay, _die); timer.daemon = True; timer.start()
+  try:
+      while True:
+          db.checkpoint()
+  except BaseException:
+      os._exit(96)          # parent asserts rc == -9, so this fails the scenario
+  ```
+
+* **Benchmarks that measure what the seed was already good at.** Two read
+  throughput tests passed on the naive store, because a dict lookup is fast.
+  Re-pointing them at the new engine — measure gets *after a `checkpoint()`*,
+  and scans *through a stale-snapshot transaction* — kept the benchmark and
+  removed the free pass, and both variants are stronger tests besides.
+
+Weighted regression plus those three bugs put the seed at 0.1785. Fixing them
+took it to 0.0000 without touching the partial-credit design for real
+attempts.
+
+## Keep the visible half honest
+
+The review bar wants a public portion of the verifier the agent can aim at, and
+a sealed portion it cannot overfit. The trap is making the visible half a
+*description of the target*: then a competent agent reads it, satisfies it, and
+stops. Make the visible suite describe what must **not regress** — behaviour
+that already exists — and say so in the instructions, in as many words:
+
+> The visible tests are deliberately only the floor. They describe the behaviour
+> that exists today, not the behaviour this document requires. Use the
+> specification, not the visible tests, as your definition of done.
+
+Then grade against your own pristine copy of that suite, so editing it locally
+changes nothing.
 
 ## Report enough to diagnose
 

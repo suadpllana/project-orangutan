@@ -1,0 +1,109 @@
+# Orangutan draft template.
+#
+# Field names and bounds mirror the authoring guideline - see docs/draft-fields.md.
+# Write these LAST, once the bundle exists and the numbers are measurements.
+#
+#   python3 tools/validate_draft.py tasks/<slug>/draft.yaml
+#   python3 tools/check_bundle.py tasks/<slug>
+#   python3 tools/render_submission.py tasks/<slug>/draft.yaml
+#
+# Bounds are enforced on submit. Treat the minimums as a floor, not a target: a
+# reviewer should be able to understand and trust the task from the draft alone.
+
+schema_version: 2
+
+# ----------------------------------------------------------------- identity
+title: ""                      # 3-200 chars; written for a reviewer skimming a queue
+workingSlug: ""                # 3-80, lowercase-kebab, == directory name
+
+# Library clone | Product clone | ML engineering | Algorithmic optimization
+collectionFamily: "Library clone"
+
+# feature_development | debugging | refactoring | performance
+# | systems_integration | other
+taskFamily: feature_development
+
+# programmatic | optimization | ml_artifact | custom
+verifierFamily: programmatic
+
+# --------------------------------------------------------------- what it is
+# 40-20,000 chars. The concrete deliverable, stated the way you would hand it to
+# an engineer: what to build, fix or produce, and what "done" looks like. Then
+# the constraints: runtime, where files may live, what may be imported, what may
+# not be inspected.
+objective: |
+  TODO
+
+# 20-10,000 chars. The real-world scenario this stands in for. Realism is a
+# review criterion: the task should look like work an engineer would actually
+# do, in an environment that resembles a real codebase.
+motivation: |
+  TODO
+
+# ------------------------------------------------------------------ effort
+# 40-20,000 chars. Where the difficulty ACTUALLY lives - the reasoning, the
+# traps, the parts a strong model gets wrong. "It's hard" is not an explanation.
+# This is what convinces the difficulty probe and the reviewer that a frontier
+# model won't one-shot it. Argue the other half too: why it is achievable.
+difficultyExplanation: |
+  TODO
+
+# Descriptive metadata, NOT a gate. Give an honest figure however large.
+expertTimeEstimateHours: 4
+
+# ------------------------------------------------------- environment & resources
+# 40-20,000 chars. Base image, languages and tooling, pre-installed
+# dependencies, and the starting state the agent finds in /app. Everything must
+# be baked into the image. State the failure model your budgets assume.
+environmentSummary: |
+  TODO
+
+resourceEstimate:
+  cpuMillis: 2000               # 100-64,000; sandbox provides 8,000
+  memoryMb: 4096                # 128-262,144; sandbox provides 65,536
+  storageMb: 8192               # 128-1,048,576; sandbox provides 40,960
+  gpuCount: 0                   # 0-8
+  agentTimeoutSec: 14400        # >= 7,200 (long-horizon floor)
+  verifierTimeoutSec: 2400      # must exceed the sum of your per-category timeouts
+  # agent + verifier + build + teardown must fit 50,400s
+
+networkRequirements:
+  mode: none                    # none | allowlist; open egress is not admitted
+  hosts: []                     # only accepted in allowlist mode, max 100
+  justification: |
+    TODO - a non-empty justification is expected even for `none`.
+
+# ----------------------------------------------------- oracle & verification
+# 20-20,000 chars. How solution/ actually solves it, so the oracle run reaches
+# full reward. If it isn't solvable by your own reference, it isn't a task.
+oracleStrategy: |
+  TODO
+
+# 40-20,000 chars. What tests/ runs, what it checks, and why that measures the
+# objective rather than a proxy. Grade from several independent angles - a
+# single assertion is the most common reason a working task is not keepable.
+# State which part of the verifier is VISIBLE and which is HELD OUT.
+verificationStrategy: |
+  TODO
+
+# ------------------------------------------------------------ scoring & exploits
+# 20-10,000 chars. The single unambiguous pass/fail line, machine-checkable.
+binarySuccessCondition: |
+  TODO
+
+# 20-10,000 chars. Continuous and monotone beats all-or-nothing. Give the
+# weights, the formula, how timeouts score - and make sure the untouched
+# starting state earns nothing.
+partialScoreStrategy: |
+  TODO
+
+# 20-20,000 chars. Reviewers weight this heavily. Every entry names its
+# countermeasure. See docs/exploit-catalog.md.
+anticipatedExploits: |
+  TODO
+
+# ------------------------------------------------------------------- notes
+# Not a draft field. Measured numbers, deviations from the defaults, known
+# weaknesses, anything a future session would want to know.
+notes: |
+  TODO

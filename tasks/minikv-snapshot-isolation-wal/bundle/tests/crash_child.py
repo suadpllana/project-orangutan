@@ -10,6 +10,7 @@ import random
 import signal
 import sys
 import threading
+import traceback
 
 from minikv import MiniKV
 
@@ -78,15 +79,27 @@ def checkpoint_race(path):
     """Kill the process at an arbitrary moment while checkpoints are running.
 
     Whenever the axe falls, every committed key must still be there.
+
+    The checkpoint loop is guarded: if `checkpoint()` raises, the process must
+    exit with a status that is *not* SIGKILL, so the parent sees a scenario
+    failure.  Without the guard the armed timer would still fire during
+    interpreter shutdown and the test would pass on a store that has no
+    `checkpoint()` at all.
     """
     db = MiniKV(path)
     for i in range(2000):
         db.put(f"k{i:04d}".encode(), f"v{i}".encode())
 
     delay = random.uniform(0.001, 0.05)
-    threading.Timer(delay, _die).start()
-    while True:
-        db.checkpoint()
+    timer = threading.Timer(delay, _die)
+    timer.daemon = True
+    timer.start()
+    try:
+        while True:
+            db.checkpoint()
+    except BaseException:
+        traceback.print_exc()
+        os._exit(96)
 
 
 SCENARIOS = {

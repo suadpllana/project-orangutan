@@ -19,7 +19,6 @@ minikv/          the package
   store.py       MiniKV
   txn.py         Transaction (stubs)
 tests/           the existing test suite
-SPEC.md          the specification the store must satisfy
 ```
 
 ## Running the tests
@@ -28,7 +27,5 @@ SPEC.md          the specification the store must satisfy
 python -m pytest tests -q
 ```
 
-## The job
-
-Make `minikv` satisfy `SPEC.md`. Read it before you start — it is the contract
-the grader checks, statement by statement.
+These cover what the store already does. They are the floor, not the target —
+the specification you are working to is in the task instructions.

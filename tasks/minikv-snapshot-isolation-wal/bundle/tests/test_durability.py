@@ -32,25 +32,46 @@ def snapshot_of(path):
         return dict(db.scan())
 
 
+def recovered_state(path):
+    """Reopen and return (contents, stats), checking the log did the work.
+
+    The specification requires `wal.log` to be the mechanism by which committed
+    data reaches disk, so a store that recovered real data with no log did not
+    implement what was asked.
+    """
+    with MiniKV(str(path)) as db:
+        contents = dict(db.scan())
+        stats = db.stats()
+    wal = Path(path) / "wal.log"
+    assert wal.exists(), "the specification requires a log file named wal.log"
+    return contents, stats
+
+
 # ----------------------------------------------------------------------
 # committed data survives
 # ----------------------------------------------------------------------
 def test_autocommit_writes_survive_sigkill(tmp_path):
     path = tmp_path / "db"
     crash("commit_then_kill", path)
-    assert snapshot_of(path) == {f"k{i}".encode(): f"v{i}".encode() for i in range(5)}
+    contents, stats = recovered_state(path)
+    assert contents == {f"k{i}".encode(): f"v{i}".encode() for i in range(5)}
+    assert stats["commit_version"] == 5
 
 
 def test_committed_transaction_survives_sigkill(tmp_path):
     path = tmp_path / "db"
     crash("txn_commit_then_kill", path)
-    assert snapshot_of(path) == {b"a": b"1", b"b": b"2", b"c": b"3"}
+    contents, stats = recovered_state(path)
+    assert contents == {b"a": b"1", b"b": b"2", b"c": b"3"}
+    assert stats["commit_version"] == 1, "one transaction is one commit"
 
 
 def test_deletes_survive_sigkill(tmp_path):
     path = tmp_path / "db"
     crash("delete_then_kill", path)
-    assert snapshot_of(path) == {b"b": b"2"}
+    contents, stats = recovered_state(path)
+    assert contents == {b"b": b"2"}
+    assert stats["commit_version"] == 3
 
 
 def test_checkpoint_plus_later_writes_survive_sigkill(tmp_path):

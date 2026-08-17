@@ -13,7 +13,6 @@ the whole run.
 from __future__ import annotations
 
 import argparse
-import io
 import json
 import os
 import shutil
@@ -27,7 +26,6 @@ from pathlib import Path
 from typing import Dict, List
 
 HERE = Path(__file__).resolve().parent
-TESTS_DIR = HERE / "tests"
 
 # name -> (test file, weight, per-category wall-clock limit in seconds)
 #
@@ -35,14 +33,26 @@ TESTS_DIR = HERE / "tests"
 # categories that explain *why* a submission failed have already run.  The
 # reference solution finishes the whole list in about four seconds, so every
 # limit here is a runaway-detector, not a budget anyone should feel.
+#
+# `regression` carries weight 0 on purpose.  It re-runs the visible suite, which
+# the starting state already passes, so scoring it would hand the untouched
+# workspace free reward and lift the nop run off its floor.  Instead its pass
+# ratio multiplies the final score: breaking behaviour that already worked costs
+# you proportionally, and the multiplier keeps the reward continuous rather than
+# introducing a cliff.
 CATEGORIES = [
-    ("regression", "test_regression.py", 0.10, 180),
-    ("api", "test_api.py", 0.10, 240),
-    ("isolation", "test_isolation.py", 0.25, 300),
-    ("compaction", "test_compaction.py", 0.10, 300),
+    ("regression", "test_regression.py", 0.00, 180),
+    ("api", "test_api.py", 0.12, 240),
+    ("isolation", "test_isolation.py", 0.27, 300),
+    ("compaction", "test_compaction.py", 0.11, 300),
     ("threads", "test_threads.py", 0.05, 300),
-    ("durability", "test_durability.py", 0.25, 420),
-    ("performance", "test_performance.py", 0.15, 420),
+    ("durability", "test_durability.py", 0.28, 420),
+    ("performance", "test_performance.py", 0.17, 420),
+]
+MULTIPLIER_CATEGORIES = {"regression"}
+
+TEST_FILES = [test_file for _name, test_file, _w, _t in CATEGORIES] + [
+    "crash_child.py"
 ]
 
 # Every category timing out at once would overrun the harness' verifier
@@ -254,11 +264,14 @@ def grade(submission: Path, deadline_seconds: float = DEFAULT_DEADLINE) -> Dict:
             return report
 
         report["collected_files"] = sorted(str(f) for f in files)
-        shutil.copytree(TESTS_DIR, tree / "_tests")
+        (tree / "_tests").mkdir()
+        for test_file in TEST_FILES:
+            shutil.copy2(HERE / test_file, tree / "_tests" / test_file)
 
         total_weight = 0.0
         earned = 0.0
         all_green = True
+        multiplier = 1.0
         for name, test_file, weight, timeout in CATEGORIES:
             remaining = deadline - time.monotonic()
             if remaining <= 5:
@@ -273,6 +286,8 @@ def grade(submission: Path, deadline_seconds: float = DEFAULT_DEADLINE) -> Dict:
                 }
                 total_weight += weight
                 all_green = False
+                if name in MULTIPLIER_CATEGORIES:
+                    multiplier = 0.0
                 print(f"  {name:<12} skipped - out of verifier time", flush=True)
                 continue
 
@@ -285,16 +300,24 @@ def grade(submission: Path, deadline_seconds: float = DEFAULT_DEADLINE) -> Dict:
             report["categories"][name] = outcome
             total_weight += weight
             earned += weight * ratio
+            if name in MULTIPLIER_CATEGORIES:
+                multiplier = ratio
             if ratio < 1.0:
                 all_green = False
             print(
                 f"  {name:<12} {outcome['passed']:>3}/{outcome['total']:<3} "
                 f"({outcome['seconds']:>6.1f}s)"
+                + ("  [multiplier]" if name in MULTIPLIER_CATEGORIES else "")
                 + ("  TIMEOUT" if outcome["timed_out"] else ""),
                 flush=True,
             )
 
-        report["score"] = round(earned / total_weight, 4) if total_weight else 0.0
+        # Breaking behaviour the starting point already had scales the whole
+        # score down, rather than costing a fixed slice of it.
+        raw = earned / total_weight if total_weight else 0.0
+        report["regression_multiplier"] = round(multiplier, 4)
+        report["raw_score"] = round(raw, 4)
+        report["score"] = round(raw * multiplier, 4)
         report["binary_pass"] = all_green and report["score"] == 1.0
         return report
     finally:
@@ -303,7 +326,7 @@ def grade(submission: Path, deadline_seconds: float = DEFAULT_DEADLINE) -> Dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--submission", required=True, type=Path)
+    parser.add_argument("--submission", type=Path, default=Path("/app"))
     parser.add_argument("--out", type=Path, default=Path("report.json"))
     parser.add_argument("--deadline", type=float, default=DEFAULT_DEADLINE)
     args = parser.parse_args()

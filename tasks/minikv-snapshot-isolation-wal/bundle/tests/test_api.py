@@ -19,10 +19,21 @@ def db(tmp_path):
     store.close()
 
 
-def test_exception_hierarchy():
+def test_exception_hierarchy(db):
     assert issubclass(ConflictError, MiniKVError)
     assert issubclass(TransactionClosedError, MiniKVError)
     assert issubclass(minikv.CorruptDatabaseError, MiniKVError)
+
+    # The classes have to be the ones actually raised, not lookalikes.
+    db.put(b"k", b"base")
+    winner, loser = db.begin(), db.begin()
+    loser.put(b"k", b"mine")
+    winner.put(b"k", b"theirs")
+    winner.commit()
+    with pytest.raises(MiniKVError):
+        loser.commit()
+    with pytest.raises(MiniKVError):
+        loser.get(b"k")
 
 
 def test_begin_returns_a_transaction(db):
@@ -33,8 +44,11 @@ def test_begin_returns_a_transaction(db):
 
 def test_directory_is_created(tmp_path):
     path = tmp_path / "deep" / "db"
-    MiniKV(str(path)).close()
+    with MiniKV(str(path)) as db:
+        with db.begin() as txn:
+            txn.put(b"k", b"v")
     assert path.is_dir()
+    assert (path / "wal.log").exists(), "the log must live inside the directory"
 
 
 @pytest.mark.parametrize("bad", ["a", bytearray(b"a"), memoryview(b"a"), 1, None])
@@ -90,6 +104,14 @@ def test_size_limits(db):
         db.put(b"k" * 4097, b"v")
     with pytest.raises(ValueError):
         db.put(b"k", b"v" * 1048577)
+
+    txn = db.begin()
+    assert txn.get(b"k" * 4096) == b"v" * 1048576
+    with pytest.raises(ValueError):
+        txn.put(b"k" * 4097, b"v")
+    with pytest.raises(ValueError):
+        txn.put(b"k", b"v" * 1048577)
+    txn.rollback()
 
 
 def test_rejected_call_changes_nothing(db):
@@ -164,7 +186,11 @@ def test_close_rejects_further_use(tmp_path):
 
 
 def test_store_context_manager_closes(tmp_path):
-    with MiniKV(str(tmp_path / "db")) as db:
-        db.put(b"k", b"v")
+    path = tmp_path / "db"
+    with MiniKV(str(path)) as db:
+        with db.begin() as txn:
+            txn.put(b"k", b"v")
     with pytest.raises(ValueError):
         db.get(b"k")
+    with MiniKV(str(path)) as reopened:
+        assert reopened.get(b"k") == b"v"

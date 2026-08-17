@@ -1,45 +1,45 @@
 # project-orangutan
 
-AI-training tasks: coding problems an agent attempts inside a sandbox, each
-paired with a programmatic grader that scores the attempt.
+Self-contained software-engineering tasks that a frontier coding agent works on
+autonomously, each graded objectively by a sealed verifier.
 
-A task is four artefacts and a write-up:
+Every task is authored in two parts:
 
-| artefact | what it is |
-| --- | --- |
-| `environment/` | the image and the workspace the agent starts in |
-| `environment/workspace/SPEC.md` | the normative specification it works from |
-| `solution/` | the reference implementation — the oracle |
-| `verifier/` | the hidden test suite and the grader that runs it |
-| `task.yaml` | every authoring-form field, the single source of the prose |
+| part | what it is | where it lives |
+| --- | --- | --- |
+| **draft** | structured metadata describing the task | `tasks/<slug>/draft.yaml` |
+| **bundle** | a ZIP in the Terminal-Bench / Harbor format holding the environment, verifier and reference solution | `tasks/<slug>/bundle/` |
+
+The draft is filled in first and is versioned; the bundle is uploaded through a
+quarantined channel and, once it passes inspection, submits the task
+automatically. `docs/submission-funnel.md` has the flow and the review bar.
 
 ## Tasks
 
-| slug | summary | expert est. | reference | seed |
-| --- | --- | --- | --- | --- |
-| [`minikv-snapshot-isolation-wal`](tasks/minikv-snapshot-isolation-wal) | Snapshot-isolated transactions and a crash-safe write-ahead log for an embedded key/value store | 4 h | 1.0000 pass | 0.1785 fail |
+| slug | family | summary | expert est. | oracle | nop |
+| --- | --- | --- | --- | --- | --- |
+| [`minikv-snapshot-isolation-wal`](tasks/minikv-snapshot-isolation-wal) | Library clone | Snapshot-isolated transactions and a crash-safe write-ahead log for an embedded key/value store | 4 h | 1.0000 pass | 0.0000 fail |
 
 ## Getting started
 
 ```bash
 pip install pyyaml pytest
 
-python3 tools/new_task.py my-new-task        # scaffold
-python3 tools/validate_task.py --all         # check task.yaml
-python3 tools/render_submission.py --all     # regenerate submission.md
+python3 tools/new_task.py my-new-task         # scaffold draft + bundle skeleton
+python3 tools/validate_draft.py --all         # bounds, enums, resource floors
+python3 tools/check_bundle.py --all           # the structure + quality gates
+python3 tools/render_submission.py --all      # regenerate submission.md
+python3 tools/build_bundle.py --all           # dist/<slug>.zip, ready to upload
 ```
 
-To grade a task's reference solution and its untouched starting point:
-
-```bash
-python3 tasks/<slug>/verifier/grade.py --submission tasks/<slug>/solution --out /tmp/oracle.json
-python3 tasks/<slug>/verifier/grade.py --submission tasks/<slug>/environment/workspace --out /tmp/seed.json
-```
+To reproduce the funnel's oracle & nop stage for a task, see that task's README.
 
 ## Documentation
 
-* [`CLAUDE.md`](CLAUDE.md) — start here: conventions and the rules that matter
-* [`docs/form-schema.md`](docs/form-schema.md) — the authoring form, field by field
+* [`CLAUDE.md`](CLAUDE.md) — start here: conventions and the ten rules that matter
+* [`docs/draft-fields.md`](docs/draft-fields.md) — the draft, field by field
+* [`docs/bundle-format.md`](docs/bundle-format.md) — required paths, `task.toml`, network phases
+* [`docs/submission-funnel.md`](docs/submission-funnel.md) — submission, the funnel, the review bar
 * [`docs/authoring-playbook.md`](docs/authoring-playbook.md) — the process, in order
 * [`docs/verifier-patterns.md`](docs/verifier-patterns.md) — reusable grader mechanics
 * [`docs/exploit-catalog.md`](docs/exploit-catalog.md) — how agents game graders

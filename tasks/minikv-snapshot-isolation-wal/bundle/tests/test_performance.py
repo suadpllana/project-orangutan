@@ -34,8 +34,10 @@ def test_bulk_put_throughput(loaded):
     assert elapsed < 20.0, f"{N} autocommit puts took {elapsed:.1f}s (budget 20s)"
 
 
-def test_random_get_throughput(loaded):
+def test_random_get_throughput_after_checkpoint(loaded):
+    """Reads must stay fast once the log has been folded into a checkpoint."""
     db, _ = loaded
+    db.checkpoint()
     rng = random.Random(1234)
     sample = [rng.choice(KEYS) for _ in range(N)]
     started = time.monotonic()
@@ -45,14 +47,23 @@ def test_random_get_throughput(loaded):
     assert elapsed < 5.0, f"{N} gets took {elapsed:.1f}s (budget 5s)"
 
 
-def test_scan_throughput(loaded):
+def test_snapshot_scan_throughput(loaded):
+    """Scanning an *old* snapshot must not degrade into a per-key search.
+
+    The autocommit write below advances the store past the transaction's
+    snapshot, so these scans cannot be served from whatever fast path the
+    current version uses.
+    """
     db, _ = loaded
+    txn = db.begin()
+    db.put(b"advance-the-version", b"x")
     started = time.monotonic()
-    for i in range(200):
+    for i in range(50):
         prefix = f"key:00000{i % 2}".encode()
-        assert db.scan(prefix)
+        assert txn.scan(prefix)
     elapsed = time.monotonic() - started
-    assert elapsed < 10.0, f"200 scans took {elapsed:.1f}s (budget 10s)"
+    txn.rollback()
+    assert elapsed < 10.0, f"50 snapshot scans took {elapsed:.1f}s (budget 10s)"
 
 
 def test_transaction_throughput(tmp_path):

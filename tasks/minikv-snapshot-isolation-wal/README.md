@@ -1,73 +1,116 @@
 # minikv-snapshot-isolation-wal
 
-Rebuild a toy key/value store's storage engine: snapshot-isolated transactions,
-an append-only write-ahead log that survives `SIGKILL`, recovery that degrades
-to a prefix of the commit history when the log is damaged, and a crash-safe
-checkpoint that actually reclaims space — under a performance budget that rules
-out rewriting the database on every write.
+Rebuild a toy embedded key/value store's storage engine: snapshot-isolated
+transactions, an append-only write-ahead log that survives `SIGKILL`, recovery
+that degrades to a prefix of the commit history when the log is damaged, and a
+crash-safe checkpoint that actually reclaims space — under a performance budget
+that rules out rewriting the database on every write.
 
 | | |
 | --- | --- |
-| task family | feature development |
-| verifier family | programmatic |
+| collection family | Library clone |
+| task family | `feature_development` |
+| verifier family | `programmatic` |
 | expert estimate | 4 hours |
-| network | none |
+| network | `none` (all phases except the image build) |
 | graded tests | 117 across 7 categories |
-| reference score | 1.0000 (binary pass) |
-| unmodified-seed score | 0.1785 (binary fail) |
+| oracle | **1.0000**, binary pass, ~4 s |
+| nop (untouched `/app`) | **0.0000**, binary fail |
 
 ## Layout
 
 ```
-task.yaml                  every authoring-form field, ready to paste
-submission.md              the same content rendered for review
-environment/
-  Dockerfile               python:3.11-slim + pytest, builds the agent image
-  workspace/               exactly what the agent starts from
-    minikv/                the package (naive storage engine + stubs)
-    tests/test_basic.py    13 visible tests that must keep passing
-    SPEC.md                the normative specification
+draft.yaml                 every draft field - the single source of the prose
+submission.md              generated; paste-ready render of draft.yaml
+bundle/                    exactly what gets zipped and uploaded
+  task.toml                [metadata] [agent] [verifier] [environment]
+  instruction.md           the problem statement + the normative specification
+  environment/
+    Dockerfile             python:3.11-slim + pytest; builds /app
+    minikv/                the naive storage engine + transaction stubs
+    tests/test_basic.py    13 visible tests - the public half of the verifier
     README.md
-solution/
-  minikv/                  the reference implementation (the oracle)
-verifier/
-  run_verifier.sh          harness entry point
-  grade.py                 collection, integrity scan, per-category runner
-  tests/                   the 117 graded tests + the crash helper
+  tests/                   sealed
+    test.sh                the verifier entrypoint the grader runs
+    grade.py               collection, integrity scan, category runner
+    test_*.py              the 117 held-out tests
+    crash_child.py         the SIGKILL scenarios
+  solution/
+    solve.sh               the entrypoint the oracle runs
+    minikv/                the reference implementation
 ```
 
-## Running it locally
+## Reproducing the oracle & nop stage locally
 
 ```bash
-# the reference implementation must score 1.0
-python3 verifier/grade.py --submission solution --out /tmp/oracle.json
+cd bundle
 
-# the starting point must score well below it, and must not pass
-python3 verifier/grade.py --submission environment/workspace --out /tmp/seed.json
+# oracle: install the reference into a copy of /app, then grade it
+mkdir -p /tmp/app && cp -r environment/minikv environment/tests /tmp/app/
+APP_DIR=/tmp/app bash solution/solve.sh
+SUBMISSION_DIR=/tmp/app bash tests/test.sh          # REWARD 1.0000
 
-# build the agent image (also self-checks the starting point)
-docker build -t minikv-task environment/
+# nop: grade the untouched starting state
+mkdir -p /tmp/nop && cp -r environment/minikv environment/tests /tmp/nop/
+SUBMISSION_DIR=/tmp/nop bash tests/test.sh          # REWARD 0.0000
+
+docker build -t minikv-task environment/   # unverified here: no docker daemon
 ```
 
-`grade.py` exits 0 only when the binary success condition is met.
+The image build has **not** been run in this repository's authoring environment
+(docker CLI present, no daemon). `environment/selfcheck.py` — the build-time
+assertion that the seed is still the seed — was run directly instead, and it
+passes on the starting state and correctly refuses the reference. Build the
+image once before submitting.
+
+`tests/test.sh` exits 0 only on a binary pass and prints `REWARD` and
+`BINARY_PASS`.
 
 ## Design notes
 
-The one thing worth knowing before reading the code: the specification's
-durability model is **process failure, not machine failure**. Bytes handed to
-the kernel count as durable, so `flush()` suffices and no `fsync` is required.
-That is deliberate — with `fsync` in the loop the performance budgets would
-really be measuring the grading host's disk, and the same submission would pass
-or fail depending on where it ran.
+The durability model is **process failure, not machine failure**. Bytes handed
+to the kernel count as durable, so `flush()` suffices and no `fsync` is
+required. That is deliberate: with `fsync` in the loop the performance budgets
+would really be measuring the grading host's disk, and the same submission would
+pass or fail depending on where it ran.
 
-Two requirements do most of the discriminating work:
+Three requirements do most of the discriminating:
 
 * `test_begin_does_not_block_writers` is single-threaded, so the usual fake —
   one lock held from `begin()` to `commit()` — deadlocks instead of passing.
 * `test_write_skew_is_allowed` fails any implementation that reaches for
-  serializability, so both over- and under-strictness are penalised.
+  serializability, so over- and under-strictness cost the same.
+* The recovery tests never look at the log format. They damage `wal.log` at
+  eight truncation points and eight corruption points and assert the recovered
+  state is a *prefix* of the commit history.
 
-The reference implementation had a real bug the suite caught: after recovering
-from a truncated log it appended new records *behind* the damaged tail, where
-recovery would never look again. `test_damaged_log_is_still_writable_afterwards`
+### Two bugs the suite caught
+
+**In the reference.** After recovering from a truncated log it appended new
+records *behind* the damaged tail, where recovery would never look again — so
+the write vanished on the next reopen. `test_damaged_log_is_still_writable_afterwards`
 covers it.
+
+**In the suite itself.** `test_kill_during_checkpoint_loses_nothing` passed on
+the untouched seed: the child armed a non-daemon `threading.Timer`, and when
+`checkpoint()` raised `NotImplementedError` the timer still fired during
+interpreter shutdown, so the process died by `SIGKILL` and the parent was
+satisfied. Six free passes. The loop is now guarded and exits `96` on any
+exception, which the parent treats as a scenario failure.
+
+Both are in `docs/verifier-patterns.md` as patterns rather than anecdotes.
+
+### Getting the nop to its floor
+
+The first measurement put the untouched starting state at 0.1785 — all of it
+credit the seed was born with rather than partial progress. Three fixes took
+it to 0.0000:
+
+* `regression` moved to weight 0, with its pass ratio multiplying the final
+  score instead (the seed passes the visible suite by definition, so scoring it
+  was free reward; breaking it now costs proportionally);
+* four `api` tests that never touched the transactional API had a transactional
+  assertion folded into each;
+* the two read-throughput benchmarks now run after a `checkpoint()` and through
+  a stale-snapshot transaction respectively, so they measure the new engine
+  rather than a dict lookup.

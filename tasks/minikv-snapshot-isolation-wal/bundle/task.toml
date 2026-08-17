@@ -1,0 +1,27 @@
+[metadata]
+name = "minikv-snapshot-isolation-wal"
+description = """
+Rebuild a small embedded key/value store's storage engine: snapshot-isolated
+transactions, an append-only write-ahead log that survives SIGKILL, recovery
+that degrades to a prefix of the commit history when the log is damaged, and a
+crash-safe checkpoint that reclaims space - under a throughput budget that rules
+out rewriting the database on every write.
+"""
+tags = ["python", "storage", "transactions", "concurrency", "crash-recovery"]
+
+[agent]
+# The phase the network policy governs. The task is fully offline.
+network_mode = "none"
+timeout_sec = 14400          # 4h, matching the expert estimate; >= the 7200s floor
+
+[verifier]
+network_mode = "none"
+timeout_sec = 2400           # grade.py holds its own 2100s deadline inside this
+
+[environment]
+# Image build. Fetching the base image, apt packages and pytest happens here.
+network_mode = "open"
+cpus = 2                     # 2000 cpuMillis in the draft
+memory_mb = 4096
+storage_mb = 8192
+gpus = 0

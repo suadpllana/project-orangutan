@@ -1,7 +1,9 @@
 """Behaviour that minikv already has and must keep.
 
-The grader runs its own pristine copy of this file, so editing it locally does
-not change your score.
+This is the visible half of the verifier. It describes what must not regress -
+not what to build; the specification in the task instructions does that. The
+grader runs its own pristine copy of this file, so editing it locally does not
+change your score, and passing it is worth no reward: it is a gate.
 """
 
 import pytest
