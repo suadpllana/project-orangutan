@@ -96,6 +96,10 @@ floor.
   no translation step when pasting.
 * **`bundle/` is exactly what gets zipped.** Nothing outside it is uploaded, so
   anything the harness needs must live there.
+* **Every new `tasks/<slug>/` must include a built ZIP artifact in that same
+  folder.** After scaffolding a task, run `python3 tools/build_bundle.py --all`
+  and place the current archive as `tasks/<slug>/<slug>.zip` so the bundle sits
+  beside its source and can be handed off without hunting through `dist/`.
 * **Write the draft fields last**, when their numbers are measurements rather
   than intentions.
 * Only `notes` and `schema_version` in `draft.yaml` are not form fields.
