@@ -104,8 +104,8 @@ satisfy this; the measurement is of bytes delivered, not of the first call.
 The frame `compress` produces MUST be a function of the input bytes alone.
 Feeding the same payload through a source that returns different chunk sizes
 MUST produce a **byte-identical** frame. The graded run compresses the same
-512 KiB stream twice, once with a well-behaved source and once with one that
-returns short reads, and compares the two frames byte for byte.
+stream twice, once with a well-behaved source and once with one that returns
+short reads, and compares the two frames byte for byte.
 
 Nothing else may influence the output: not the clock, not the environment, not
 a random seed, not the process id.
@@ -129,21 +129,28 @@ This is the constraint that shapes the design. The device has a few hundred
 kilobytes to spare and the streams are megabytes.
 
 Each call runs in a fresh interpreter with `tracemalloc` started **before**
-`zipstream` is imported. Two figures are taken:
+`zipstream` is imported. The package is byte-compiled once, before any call is
+measured, so the cost of compiling your source is not charged to you and the
+figures below do not depend on how many bytes of Python you wrote. Two figures
+are taken:
 
 * **import footprint** — traced bytes alive at the moment your entry point is
   called. MUST be under **393,216 bytes (384 KiB)**.
 * **working set** — the peak traced bytes during the call, above that
   baseline. MUST be under **393,216 bytes (384 KiB)**.
 
-Both apply to `compress` and to `decompress`. The graded streams are 512 KiB
-and 896 KiB, so there is no arrangement of the two budgets that lets you hold
-one: buffering the stream during the call blows the working set, and
+Both apply to `compress` and to `decompress`, and to **every** graded stream:
+the figure that is scored is the worst one across all of them. The graded
+streams run from 192 KiB to 768 KiB, and the ones the budget is decided on are
+512 KiB and 768 KiB, so there is no arrangement of the two budgets that lets
+you hold a stream: buffering it during the call blows the working set, and
 pre-allocating a buffer at import time blows the import footprint.
 
 The working set MUST also be **independent of the length of the stream**: the
-figure measured on the 896 KiB stream may exceed the figure measured on the
-512 KiB stream by no more than **32,768 bytes**.
+figure measured on the 768 KiB stream may exceed the figure measured on the
+512 KiB stream by no more than **40,960 bytes**. That is 16% of the extra
+quarter-megabyte, so a working set that grows with the stream at any real rate
+fails it.
 
 Two practical notes, because the measurement is exact and it is easy to be
 surprised by it:
@@ -164,10 +171,11 @@ that would be crediting the starting workspace rather than your work.
 
 ## 5. Compression
 
-The graded streams are 512 KiB of synthesised telemetry in six profiles. Five
-of them carry a target. Each target is expressed as a fraction of what the
-**shipping v1 codec** produces on that same stream, computed by the grader on
-the same bytes, so the bar does not move with the data:
+The graded streams are synthesised telemetry in six profiles, 192 KiB to
+512 KiB of each. Five of them carry a target. Each target is expressed as a
+fraction of what the **shipping v1 codec** produces on that same stream,
+computed by the grader on the same bytes, so the bar does not move with the
+data:
 
 | profile | what it is | target |
 | --- | --- | --- |
@@ -200,13 +208,13 @@ just as hard, because the cheap way to win a ratio target is a model that
 falls apart on everything else.
 
 * **Expansion.** For an input of `n` bytes the frame MUST be at most
-  `n + 64 + n // 64` bytes. Graded on 512 KiB of incompressible random data.
+  `n + 64 + n // 64` bytes. Graded on 192 KiB of incompressible random data.
 * **Six-bit payloads.** On the `opaque` profile — base64 payload lines, which
   carry six bits of information in every eight-bit byte — the frame MUST be at
   most **1.04×** what the shipping codec produces. A match finder that gives up
   and a model that fragments both fail here, and so does anything that assumes
   its ratio target implies general competence.
-* **A stream of one repeated byte** (512 KiB of it) MUST compress to at most
+* **A stream of one repeated byte** (192 KiB of it) MUST compress to at most
   `n // 100 + 64` bytes. Note what this rules out: a pure Huffman coder cannot
   spend less than one bit per symbol, which is `n // 8`, eight times over
   budget. Getting under it requires run-length coding, matches, or an
@@ -217,8 +225,8 @@ falls apart on everything else.
 
 ## 7. Adaptivity
 
-The model MUST keep learning for the whole stream. Let `A` be 256 KiB of
-`logfmt` and `B` be 256 KiB of `binlog`. Compressing `A` and `B` separately
+The model MUST keep learning for the whole stream. Let `A` be 96 KiB of
+`logfmt` and `B` be 96 KiB of `binlog`. Compressing `A` and `B` separately
 gives two sizes; compressing `A + B` as one stream, or `B + A`, MUST produce at
 most **1.05×** their sum.
 

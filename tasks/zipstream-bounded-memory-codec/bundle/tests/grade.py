@@ -49,21 +49,56 @@ PASS_THRESHOLD = 0.88
 # timeout_sec` in task.toml is 1000 and the draft's envelope is 1200, so this
 # deadline sits comfortably inside both. A submission nine times slower than
 # the reference still finishes.
-DEADLINE_SECONDS = 780
+DEADLINE_SECONDS = 600
 PER_CALL_TIMEOUT = 120
 
 # --------------------------------------------------------------------- the rules
 # Every one of these numbers is quoted in instruction.md; the spec and the
 # grader are meant to be readable side by side.
 
+# Stream sizes. Two of them are load-bearing and one is a cost control:
+#
+#   BIG   the size at which the memory budget is proved. It has to exceed the
+#         384 KiB working-set budget by enough that holding the stream is not
+#         arithmetically possible, so it cannot shrink.
+#   HUGE  the long stream the working set is shown to be independent of.
+#   MID   everything whose graded property is a RATIO -- a fraction of the
+#         shipping codec on the same bytes, or a multiple of the input length.
+#         Those are scale-free, so measuring them on a smaller stream measures
+#         the same thing.
+#
+# The split exists because every call runs under `tracemalloc`, which costs
+# about 14x on an allocation-heavy codec: the whole verifier is proportional to
+# the number of graded bytes. Keeping the memory proof at 512 KiB and 768 KiB
+# while grading the scale-free properties at 192 KiB halves the run without
+# weakening a single check -- the working-set budget is still the worst case
+# across every stream, and the worst case is still one of the big ones.
 BIG = 512 * 1024
-HUGE = 896 * 1024
+MID = 192 * 1024
+HUGE = 768 * 1024
 WORKING_BUDGET = 384 * 1024
 RESIDENT_BUDGET = 384 * 1024
-MEMORY_DRIFT = 32 * 1024
+MEMORY_DRIFT = 40 * 1024
 INCREMENTAL_FRACTION = 0.25
 ADAPTIVITY_SLACK = 1.05
 OPAQUE_CEILING = 1.04
+
+# Which stream is measured at which size. `logfmt` and `mixed` carry the memory
+# proof (with `huge`, a 768 KiB logfmt stream); `binlog` stays large because its
+# ratio target has the least slack of the five and a shorter stream would be
+# measuring the model's warm-up rather than its steady state.
+STREAM_BYTES = {
+    "logfmt": BIG,
+    "mixed": BIG,
+    "binlog": BIG,
+    "csv": MID,
+    "jsonl": MID,
+    "opaque": MID,
+    "random": MID,
+    "repeated": MID,
+    "cycle": MID,
+    "edge": MID,
+}
 
 RATIO_TARGETS = {
     "logfmt": 0.52,
@@ -122,33 +157,72 @@ REWARD_NAMES = ("reward.txt", "reward.json", "score.txt", "score.json")
 
 
 def reward_directories():
+    """Every directory the harness might read a reward out of.
+
+    The platform's own failure message names ``verifier/reward.txt`` and
+    ``reward.json``, which reads as a path relative to a trial directory as
+    easily as an absolute one, so each base is covered both ways.
+    """
     seen = []
-    for directory in (LOG_DIR, "/logs", "/verifier", "/tests", HERE,
-                      os.path.dirname(HERE), os.getcwd(), tempfile.gettempdir()):
-        if directory and directory not in seen:
-            seen.append(directory)
+    for base in (LOG_DIR, "/logs", "/verifier", "/tests", "/output", "/results",
+                 HERE, os.path.dirname(HERE), os.getcwd(), tempfile.gettempdir()):
+        if not base:
+            continue
+        for directory in (base, os.path.join(base, "verifier")):
+            if directory not in seen:
+                seen.append(directory)
     return seen
 
 
-def clear_stale_rewards():
-    """The agent can write to /logs. A leftover 1.0 must never be read as a score."""
-    cleared = []
+def overwrite_stale_rewards():
+    """The agent can write to /logs. A leftover 1.0 must never be read as a score.
+
+    A stale value is *overwritten*, never deleted: unlinking it would leave an
+    instant in which the trial has no reward on disk at all, and a verifier
+    killed in that instant is reported as a broken verifier rather than as a
+    failed submission. Only a file that refuses to be written is removed, and
+    then only so that a fresh one can take its place immediately.
+    """
+    stubborn = []
     for directory in reward_directories():
-        for name in REWARD_NAMES + ("junit.xml",):
+        for name in REWARD_NAMES:
             path = os.path.join(directory, name)
+            if not os.path.exists(path):
+                continue
             try:
-                if os.path.exists(path):
-                    os.chmod(path, 0o644)
-                    os.unlink(path)
-                    cleared.append(path)
+                os.chmod(path, 0o644)
             except OSError:
-                print("WARNING: could not clear a pre-existing %s" % (path,))
-    if cleared:
-        print("cleared %d stale reward artefact(s)" % (len(cleared),))
+                pass
+            try:
+                with open(path, "w", encoding="utf-8") as handle:
+                    handle.write("0.000000\n" if not name.endswith(".json")
+                                 else '{"reward": 0.0, "score": 0.0}\n')
+            except OSError:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    stubborn.append(path)
+        # junit.xml is not a reward file, so removing it can never leave the
+        # trial without one -- and an overwritten one would be worse than none.
+        junit = os.path.join(directory, "junit.xml")
+        if os.path.exists(junit):
+            try:
+                os.unlink(junit)
+            except OSError:
+                stubborn.append(junit)
+    if stubborn:
+        print("WARNING: could not overwrite %d pre-existing artefact(s): %s"
+              % (len(stubborn), ", ".join(stubborn[:3])))
 
 
 def publish(score, report=None):
-    """Write the score everywhere the harness might look, under both names."""
+    """Write the score everywhere the harness might look, under both names.
+
+    Called at the start of the run, after every scoring category, and once at
+    the end. The intermediate calls matter: a verifier that is killed part-way
+    then reports the score of the categories that did finish instead of
+    vanishing without a reward file.
+    """
     payload = dict(report or {})
     payload["score"] = score
     payload["reward"] = score
@@ -169,6 +243,71 @@ def publish(score, report=None):
             except OSError:
                 pass
     return written
+
+
+def publish_progress(sheet, seed, stage):
+    """Publish the score of the categories that have finished so far.
+
+    Categories are scored as they complete and the regression multiplier is
+    measured first, so this number only ever grows towards the final one. It
+    exists so that a verifier killed mid-run leaves a real partial score behind
+    instead of nothing.
+    """
+    rows, total, multiplier = score_sheet(sheet)
+    publish(
+        round(total, 6),
+        {
+            "seed": seed,
+            "stage": stage,
+            "passed": False,
+            "threshold": PASS_THRESHOLD,
+            "multiplier": multiplier,
+            "partial": True,
+            "categories": [
+                {"name": row["name"], "weight": row["weight"], "fraction": row["fraction"]}
+                for row in rows
+            ],
+        },
+    )
+
+
+def precompile(impl_root):
+    """Byte-compile the graded tree once, before any measurement is taken.
+
+    The import footprint is measured with `tracemalloc` running, so whatever
+    the import allocates is charged to the submission -- and compiling a module
+    from source leaves roughly eight times the source size alive that loading
+    the same module from a `.pyc` does. The reference is 28 KiB of Python and
+    pays 225 KiB for being compiled; a submission using the 96 KiB the spec
+    allows would blow a 384 KiB budget on nothing but the size of its own
+    source text.
+
+    That is not the thing the budget is for. Compiling once here, up front,
+    makes the figure measure what the spec says it measures: the module objects
+    and the tables built at import time. It also makes it independent of how
+    the submission is laid out across files.
+    """
+    environment = dict(os.environ)
+    environment.pop("PYTHONDONTWRITEBYTECODE", None)
+    environment.pop("PYTHONPATH", None)
+    try:
+        finished = subprocess.run(
+            [sys.executable, "-m", "compileall", "-q", impl_root],
+            env=environment,
+            timeout=120,
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        print("WARNING: could not byte-compile the submission (%s); every call "
+              "will pay the compile cost of its own source" % (exc,))
+        return
+    if finished.returncode != 0:
+        # A submission that does not compile fails everything downstream on its
+        # own; say so here rather than leaving the cause to be guessed at.
+        print("WARNING: the submission did not byte-compile cleanly:\n%s"
+              % (((finished.stdout or "") + (finished.stderr or ""))[-600:],))
 
 
 # -------------------------------------------------------------------- the runner
@@ -352,23 +491,24 @@ def write_stream(scratch, name, data):
     return path
 
 
-def build_edge_stream(seed):
+def build_edge_stream(seed, size):
     """One stream that is many shapes at once, so heterogeneity is graded too."""
+    unit = size // 32
     parts = [
-        b"\x00" * 8192,
-        _corpus.generate("logfmt", 96 * 1024, seed),
-        b"\xff" * 4096,
-        _corpus.alphabet_cycle(16 * 1024),
-        _corpus.generate("random", 48 * 1024, seed + 1),
-        b"\n" * 1024,
-        _corpus.generate("jsonl", 96 * 1024, seed + 2),
-        _corpus.repeated(0x7A, 32 * 1024),
-        _corpus.generate("binlog", 96 * 1024, seed + 3),
+        b"\x00" * (unit * 2),
+        _corpus.generate("logfmt", unit * 6, seed),
+        b"\xff" * unit,
+        _corpus.alphabet_cycle(unit),
+        _corpus.generate("random", unit * 3, seed + 1),
+        b"\n" * (unit // 2),
+        _corpus.generate("jsonl", unit * 6, seed + 2),
+        _corpus.repeated(0x7A, unit * 2),
+        _corpus.generate("binlog", unit * 6, seed + 3),
     ]
     blob = b"".join(parts)
-    while len(blob) < BIG:
-        blob += _corpus.generate("csv", BIG - len(blob), seed + 4)
-    return blob[:BIG]
+    while len(blob) < size:
+        blob += _corpus.generate("csv", size - len(blob), seed + 4)
+    return blob[:size]
 
 
 def grade(runner, scratch, seed, sheet):
@@ -377,6 +517,21 @@ def grade(runner, scratch, seed, sheet):
     def stream(name, data):
         streams[name] = write_stream(scratch, name, data)
         return streams[name]
+
+    def progress(stage):
+        """Publish what has been measured so far, then carry on."""
+        try:
+            publish_progress(sheet, seed, stage)
+        except Exception as exc:  # noqa: BLE001 - a progress publish never fails a run
+            print("WARNING: could not publish progress at %s: %s" % (stage, exc))
+
+    # ------------------------------------------------------------- regression
+    # First, not last. It costs a couple of seconds, and its pass ratio is the
+    # multiplier every other category is scaled by -- measuring it up front is
+    # what makes the intermediate publishes below monotone rather than
+    # optimistic.
+    run_regression(runner, sheet)
+    progress("regression")
 
     # ---------------------------------------------------------------- framing
     # Cheapest and most diagnostic first: small payloads, where the fixed cost
@@ -434,14 +589,16 @@ def grade(runner, scratch, seed, sheet):
             % (len(payload), size, bound),
         )
 
+    progress("framing")
+
     # ------------------------------------------------------------- round trips
     profiles = ("logfmt", "csv", "jsonl", "binlog", "mixed", "opaque")
     for profile in profiles:
-        stream(profile, _corpus.generate(profile, BIG, seed))
-    stream("random", _corpus.generate("random", BIG, seed))
-    stream("repeated", _corpus.repeated((seed % 251) + 1, BIG))
-    stream("cycle", _corpus.alphabet_cycle(BIG))
-    stream("edge", build_edge_stream(seed))
+        stream(profile, _corpus.generate(profile, STREAM_BYTES[profile], seed))
+    stream("random", _corpus.generate("random", STREAM_BYTES["random"], seed))
+    stream("repeated", _corpus.repeated((seed % 251) + 1, STREAM_BYTES["repeated"]))
+    stream("cycle", _corpus.alphabet_cycle(STREAM_BYTES["cycle"]))
+    stream("edge", build_edge_stream(seed, STREAM_BYTES["edge"]))
 
     roundtrip_set = list(profiles) + ["random", "repeated", "cycle", "edge"]
     frames = {}
@@ -459,30 +616,37 @@ def grade(runner, scratch, seed, sheet):
             continue
         if same_bytes(streams[name], back["output"]):
             sheet.add("roundtrip", "roundtrip.%s" % (name,), 1.0,
-                      "%d -> %d -> %d bytes" % (BIG, file_size(compressed["output"]), BIG))
+                      "%d -> %d -> %d bytes" % (STREAM_BYTES[name],
+                                                file_size(compressed["output"]),
+                                                STREAM_BYTES[name]))
         else:
             sheet.add("roundtrip", "roundtrip.%s" % (name,), 0.0,
                       "recovered %d bytes and they differ" % (file_size(back["output"]),))
 
+    progress("roundtrip")
+
     # ---------------------------------------------------------------- contract
-    short = runner.call("logfmt_short_c", "compress", streams["logfmt"], short_reads=True)
+    chunked = "csv"
+    chunked_bytes = STREAM_BYTES[chunked]
+    short = runner.call("%s_short_c" % (chunked,), "compress", streams[chunked],
+                        short_reads=True)
     if call_ok(short):
         sheet.add("contract", "contract.short_reads", 1.0,
                   "%d reads, %d bytes consumed" % (short.get("reads", 0), short.get("bytes_in", 0)))
-        if short.get("bytes_in") == BIG:
+        if short.get("bytes_in") == chunked_bytes:
             sheet.add("contract", "contract.consumes_everything", 1.0, "")
         else:
             sheet.add("contract", "contract.consumes_everything", 0.0,
                       "read %s of %d bytes: a short read is not end of stream"
-                      % (short.get("bytes_in"), BIG))
-        if "logfmt" in frames and same_bytes(short["output"], frames["logfmt"]["output"]):
+                      % (short.get("bytes_in"), chunked_bytes))
+        if chunked in frames and same_bytes(short["output"], frames[chunked]["output"]):
             sheet.add("contract", "contract.chunking_is_invisible", 1.0,
                       "identical frame under both read schedules")
         else:
             sheet.add("contract", "contract.chunking_is_invisible", 0.0,
                       "the frame changed when the source returned short reads: %d vs %d bytes"
                       % (file_size(short["output"]),
-                         file_size(frames["logfmt"]["output"]) if "logfmt" in frames else -1))
+                         file_size(frames[chunked]["output"]) if chunked in frames else -1))
     else:
         for name in ("contract.short_reads", "contract.consumes_everything",
                      "contract.chunking_is_invisible"):
@@ -510,6 +674,8 @@ def grade(runner, scratch, seed, sheet):
     else:
         sheet.add("contract", "contract.emits_before_the_end", 0.0, "no usable compress run")
         sheet.add("contract", "contract.no_forbidden_access", 0.0, "no usable compress run")
+
+    progress("contract")
 
     # ------------------------------------------------------------------ memory
     for label, kind in (("compress", "_c"), ("decompress", "_d")):
@@ -539,18 +705,20 @@ def grade(runner, scratch, seed, sheet):
     # already imports cheaply, and crediting that would be crediting the seed.
     # It is graded as half of a conjunction with a clean large round trip.
     residents = [
-        result.get("resident", 0)
-        for result in runner.results.values()
+        (result.get("resident", 0), name)
+        for name, result in runner.results.items()
         if result.get("ok")
     ]
     pair = [runner.results.get("logfmt_c"), runner.results.get("logfmt_d")]
     if residents and all(call_ok(result) for result in pair):
+        worst_resident, worst_resident_call = max(residents)
         sheet.add(
             "memory",
             "memory.import_footprint",
-            1.0 if max(residents) <= RESIDENT_BUDGET else 0.0,
-            "worst import footprint %d B, budget %d B, with a clean %d KiB round trip"
-            % (max(residents), RESIDENT_BUDGET, BIG // 1024),
+            1.0 if worst_resident <= RESIDENT_BUDGET else 0.0,
+            "worst import footprint %d B on %s, budget %d B, with a clean %d KiB round trip"
+            % (worst_resident, worst_resident_call, RESIDENT_BUDGET,
+               STREAM_BYTES["logfmt"] // 1024),
         )
     else:
         sheet.add("memory", "memory.import_footprint", 0.0,
@@ -567,11 +735,14 @@ def grade(runner, scratch, seed, sheet):
             "memory.constant_in_stream_length",
             1.0 if drift <= MEMORY_DRIFT else 0.0,
             "%d B at %d KiB, %d B at %d KiB: drift %d B (allowed %d)"
-            % (small.get("working", 0), BIG // 1024, huge.get("working", 0),
+            % (small.get("working", 0), STREAM_BYTES["logfmt"] // 1024,
+               huge.get("working", 0),
                HUGE // 1024, drift, MEMORY_DRIFT),
         )
     else:
         sheet.add("memory", "memory.constant_in_stream_length", 0.0, why_not(huge))
+
+    progress("memory")
 
     # ------------------------------------------------------------------- ratio
     for profile, target in sorted(RATIO_TARGETS.items()):
@@ -592,8 +763,11 @@ def grade(runner, scratch, seed, sheet):
             "ratio.%s" % (profile,),
             earned,
             "%d bytes = %.4f of the shipping codec's %d (target %.2f, ratio %.4f)"
-            % (achieved, achieved / float(baseline), baseline, target, achieved / float(BIG)),
+            % (achieved, achieved / float(baseline), baseline, target,
+               achieved / float(STREAM_BYTES[profile])),
         )
+
+    progress("ratio")
 
     # ----------------------------------------------------------------- ceiling
     if "opaque" in frames:
@@ -610,9 +784,12 @@ def grade(runner, scratch, seed, sheet):
         sheet.add("ceiling", "ceiling.six_bit_payload", 0.0, "no usable compress run")
 
     for name, bound, label in (
-        ("random", expansion_bound(BIG), "expansion on incompressible input"),
-        ("repeated", BIG // 100 + 64, "a stream of one repeated byte"),
-        ("cycle", BIG // 10 + 64, "a stream that is perfectly order-1 predictable"),
+        ("random", expansion_bound(STREAM_BYTES["random"]),
+         "expansion on incompressible input"),
+        ("repeated", STREAM_BYTES["repeated"] // 100 + 64,
+         "a stream of one repeated byte"),
+        ("cycle", STREAM_BYTES["cycle"] // 10 + 64,
+         "a stream that is perfectly order-1 predictable"),
     ):
         if name not in frames:
             sheet.add("ceiling", "ceiling.%s" % (name,), 0.0, "no usable compress run")
@@ -625,9 +802,11 @@ def grade(runner, scratch, seed, sheet):
             "%s: %d bytes, bound %d" % (label, achieved, bound),
         )
 
+    progress("ceiling")
+
     # -------------------------------------------------------------- adaptivity
-    first_half = _corpus.generate("logfmt", BIG // 2, seed + 11)
-    second_half = _corpus.generate("binlog", BIG // 2, seed + 12)
+    first_half = _corpus.generate("logfmt", MID // 2, seed + 11)
+    second_half = _corpus.generate("binlog", MID // 2, seed + 12)
     paths = {
         "seg_a": write_stream(scratch, "seg_a", first_half),
         "seg_b": write_stream(scratch, "seg_b", second_half),
@@ -657,6 +836,8 @@ def grade(runner, scratch, seed, sheet):
     else:
         sheet.add("adaptivity", "adaptivity.forwards", 0.0, "no usable compress run")
         sheet.add("adaptivity", "adaptivity.backwards", 0.0, "no usable compress run")
+
+    progress("adaptivity")
 
     # -------------------------------------------------------------- robustness
     if "logfmt" in frames:
@@ -696,9 +877,7 @@ def grade(runner, scratch, seed, sheet):
         else:
             sheet.add("robustness", "robustness.%s" % (name,), 0.0,
                       "raised %s, not CorruptStream" % (result.get("exception_type"),))
-
-    # -------------------------------------------------------------- regression
-    run_regression(runner, sheet)
+    progress("robustness")
 
 
 def run_regression(runner, sheet):
@@ -740,15 +919,61 @@ def run_regression(runner, sheet):
     total, failed, names = parse_junit(junit)
     tail = ((finished.stdout or "").strip().splitlines() or [""])[-1]
     if not total:
-        sheet.add("regression", "regression.public_suite", 0.0,
-                  "the visible suite collected nothing: %s" % (tail[:160],))
-        return
+        # pytest itself did not run -- it is missing from the image, or it
+        # failed before collection. That is a fact about the grading
+        # environment, not about the submission, and this category multiplies
+        # every other one, so falling back is the difference between a real
+        # score and a spurious zero.
+        total, failed, names = run_regression_without_pytest(suite, runner.impl_root)
+        if not total:
+            sheet.add("regression", "regression.public_suite", 0.0,
+                      "the visible suite collected nothing: %s" % (tail[:160],))
+            return
+        print("pytest did not collect; ran the visible suite with the built-in "
+              "fallback runner instead (%s)" % (tail[:80],))
     passed = total - failed
     detail = "%d of %d visible tests pass" % (passed, total)
     if names:
         detail += " -- broken: %s" % (", ".join(names[:4]),)
     sheet.add("regression", "regression.public_suite", passed / float(total), detail[:220],
               points=1.0)
+
+
+def run_regression_without_pytest(suite, impl_root):
+    """Run the visible suite with no third-party test runner at all.
+
+    `_fallback_pytest.py` stands in for the two pytest features the visible
+    suite uses and runs the `test_*` functions itself. It runs in a child, from
+    the grader's own pristine copy of the suite, exactly as the pytest path
+    does -- the submission never gets to influence which tests exist.
+    """
+    runner_path = os.path.join(HERE, "_fallback_pytest.py")
+    if not os.path.isfile(runner_path):
+        return 0, 0, []
+    environment = dict(os.environ)
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    environment.pop("PYTHONPATH", None)
+    try:
+        finished = subprocess.run(
+            [sys.executable, runner_path, suite, impl_root],
+            cwd=os.path.dirname(suite),
+            env=environment,
+            timeout=180,
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return 0, 0, []
+    for line in (finished.stdout or "").splitlines():
+        if line.startswith("RESULT "):
+            try:
+                payload = json.loads(line[len("RESULT "):])
+            except ValueError:
+                return 0, 0, []
+            broken = payload.get("broken") or []
+            return int(payload.get("total") or 0), len(broken), broken
+    return 0, 0, []
 
 
 def parse_junit(path):
@@ -788,7 +1013,11 @@ def score_sheet(sheet):
         earned = sum(check["earned"] for check in checks)
         fraction = (earned / possible) if possible else 0.0
         if name == "regression":
-            multiplier = fraction
+            # No regression checks recorded at all means the category has not
+            # run yet (a progress publish) or could not run (a broken pytest).
+            # Neither is evidence that the submission broke anything, and a 0.0
+            # multiplier there would silently zero an otherwise good score.
+            multiplier = fraction if possible else 1.0
         else:
             total += weight * fraction
         rows.append(
@@ -819,7 +1048,7 @@ def print_report(rows, total, multiplier, seed, runner):
 
 
 def main():
-    clear_stale_rewards()
+    overwrite_stale_rewards()
     publish(0.0, {"stage": "starting", "passed": False, "threshold": PASS_THRESHOLD})
 
     seed_text = os.environ.get("GRADER_SEED") or str(int.from_bytes(os.urandom(4), "big"))
@@ -832,8 +1061,8 @@ def main():
     print("zipstream verifier")
     print("implementation root: %s" % (IMPL_ROOT,))
     print("seed: %d   (set GRADER_SEED to reproduce)" % (seed,))
-    print("budgets: working %d B, import %d B, streams %d B" % (
-        WORKING_BUDGET, RESIDENT_BUDGET, BIG))
+    print("budgets: working %d B, import %d B, streams %d-%d B" % (
+        WORKING_BUDGET, RESIDENT_BUDGET, MID, HUGE))
     print("=" * 72)
     print()
 
@@ -868,6 +1097,7 @@ def main():
         shutil.move(os.path.join(scratch, _integrity.PACKAGE),
                     os.path.join(runner.impl_root, _integrity.PACKAGE))
         print("grading from %s" % (runner.impl_root,))
+        precompile(runner.impl_root)
         print()
 
         grade(runner, scratch, seed, sheet)
@@ -878,6 +1108,14 @@ def main():
             for row in rows
         ]
         report["multiplier"] = multiplier
+        # The raw measurement table, so every number in the report above can be
+        # traced back to the call it came from.
+        report["measurements"] = {
+            name: {key: result.get(key) for key in
+                   ("ok", "resident", "working", "peak", "bytes_in", "bytes_out",
+                    "reads", "writes", "seconds", "error", "violations")}
+            for name, result in sorted(runner.results.items())
+        }
     except BaseException as exc:  # noqa: BLE001 - a dead grader must still publish
         total = 0.0
         report["error"] = "%s: %s" % (type(exc).__name__, exc)

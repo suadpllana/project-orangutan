@@ -34,14 +34,22 @@ timeout_sec = 14000
 [verifier]
 entrypoint = "tests/test.sh"
 network_mode = "none"
-# Measured: 87s of child time against the reference, 8s against the untouched
-# starting state (which fails fast), 105s against the slowest wrong submission
-# tried. 1000s is roughly 11x headroom over the reference and sits below the
-# draft's 1200s envelope; grade.py holds its own 780s deadline inside it, and
-# each individual codec call is capped at 120s so a hang costs one measurement.
+# Measured on a 2.8 GHz core: 151s of child time against the reference (154s
+# wall), 13s against the untouched starting state, which fails fast. 1000s is
+# 6.5x headroom over the reference and sits below the draft's 1200s envelope.
+#
+# The layering inside that is deliberate, because a verifier the harness kills
+# writes no report and is scored as a broken task rather than a failed
+# submission: grade.py holds its own 600s deadline, each individual codec call
+# is capped at 120s, and 600 + 120 = 720 < 1000. A submission four times slower
+# than the reference still finishes; one that hangs costs a single measurement;
+# one that hangs repeatedly is stopped by the deadline and still reports.
 timeout_sec = 1000
-# Continuous, weighted score in [0, 1]; written to /logs/reward.txt and
-# /logs/reward.json, plus every other plausible location. Exit status 0 means
+# Continuous, weighted score in [0, 1]. It is published to /logs/reward.txt and
+# /logs/reward.json, to every other plausible directory, and to a `verifier/`
+# subdirectory of each -- before grading starts, after every scoring category,
+# and once at the end. Nothing in the verifier ever deletes a reward file, so
+# there is no instant in the trial at which none exists. Exit status 0 means
 # the score reached the threshold.
 reward_file = "/logs/reward.txt"
 pass_threshold = 0.88

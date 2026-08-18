@@ -20,7 +20,7 @@ that wins one profile by collapsing everywhere else does not pass.
 | network | `none` (all phases except the image build) |
 | graded checks | 38 across 9 categories |
 | pass threshold | 0.88 (`[verifier] pass_threshold`) |
-| oracle | **1.0000**, PASS, 48 codec calls, 87 s of child time |
+| oracle | **1.0000**, PASS, 48 codec calls, 151 s of child time on a 2.8 GHz core |
 | nop (untouched `/app`) | **0.0000**, FAIL |
 | nothing is timed | every graded quantity is a byte count or a `tracemalloc` figure |
 
@@ -70,33 +70,96 @@ mkdir -p /tmp/nop && cp -r environment/zipstream environment/public_tests enviro
 IMPL_ROOT=/tmp/nop LOG_DIR=/tmp/logs bash tests/test.sh    # SCORE: 0.0000, FAIL
 
 docker build -t zipstream-task environment/   # unverified here: no docker daemon
+
+# a local run publishes the reward into every candidate directory, including
+# this one; clear them before building the archive
+find . \( -name __pycache__ -o -name verifier \) -type d -prune -exec rm -rf {} +
+rm -f reward.* score.* tests/reward.* tests/score.* tests/junit.xml
 ```
+
+`tools/check_bundle.py` fails the bundle if any of those are still there, so
+the cleanup is checked rather than remembered.
 
 The image build has **not** been run in this repository's authoring
 environment. `environment/selfcheck.py` — the build-time assertion that the
 seed both works and is still inadequate — was run directly instead and passes,
 as does the visible suite (23/23). Build the image once before submitting.
 
+## Attempt 1: "your verifier completed without writing a reward file"
+
+The first upload cleared **Bundle structure** and **Similarity screening** and
+failed **Oracle & nop** with:
+
+> Your verifier completed without writing a reward file
+> (`verifier/reward.txt` or `reward.json`) — every trial must produce one.
+
+The nop trial cannot have been the one that failed: it grades in 13 s and ends
+by publishing `0.000000`, reproducibly. The oracle trial is the long one, and
+two things about it combined into a verifier that could end with no reward file
+at all:
+
+* **The run was slow enough to be killable.** `task.toml` claimed 87 s of child
+  time, measured on the authoring host. On an ordinary 2.8 GHz core the same
+  suite took **264 s** — a 3x spread between two unremarkable machines, against
+  a 1000 s verifier limit. A grading host at the slow end of that spread lands
+  on the limit, and a killed container copies nothing out.
+* **The 0.0 floor was being deleted.** `test.sh` wrote a floor before grading,
+  which is right; then `grade.py` started by *unlinking* every stale reward
+  artefact — including that floor — before writing its own. Any kill after that
+  unlink left the trial with no reward file anywhere. The one defence against a
+  kill was being removed by the thing it was defending.
+
+Both are fixed, and the fix for each is structural rather than a bigger number:
+
+* **Nothing deletes a reward file any more.** A stale value is *overwritten in
+  place*, so there is no instant in the trial without one. The floor is now
+  written in POSIX shell rather than by a Python heredoc, so it does not need
+  an interpreter; a `trap` re-asserts it on `EXIT`, `TERM`, `INT` and `HUP`;
+  the grader publishes again after every scoring category, so a kill reports a
+  partial score instead of nothing; and `test.sh` parses `SCORE:` back out of
+  the grader's own report and republishes it from the shell, so the reward does
+  not depend on the grader's writer either. Every location is written under
+  both names and in a `verifier/` subdirectory, since the platform's message
+  names that path.
+* **The run is 1.7x shorter.** Every graded call runs under `tracemalloc`,
+  which costs about **14x** on an allocation-heavy codec — the verifier's
+  runtime is essentially proportional to the number of graded bytes. The memory
+  proof needs large streams and keeps them (512 KiB and 768 KiB); the
+  scale-free properties — a ratio against the shipping codec on the same bytes,
+  a bound that is a multiple of the input length — measure the same thing at
+  192 KiB and now use it. 264 s became **151 s**, and the grader's own deadline
+  came down from 780 s to 600 s, so 600 + 120 (one call's cap) = 720 s is
+  still comfortably inside the 1000 s the verifier declares.
+
+Verified three ways after the change: a normal run writes `1.000000`, a grader
+exception writes `0.0000` with the traceback in the report, and `SIGKILL` 20 s
+in leaves `0.090000` — the categories that had finished — in both `reward.txt`
+and `verifier/reward.txt`.
+
 ## Design notes
 
 **Nothing is timed.** Every graded quantity is a byte count on disk or a
 `tracemalloc` figure. Both are exactly reproducible for a given submission and
 seed, so a score does not move with the load on the grading host. The only
-wall-clock numbers are safety limits — 120 s per codec call, 780 s for the
-whole run — and they exist so a hang costs one measurement rather than the
-report. The reference averages 1.8 s per call.
+wall-clock numbers are safety limits — 120 s per codec call, 600 s for the
+whole run, 1000 s for the verifier — and they exist so a hang costs one
+measurement rather than the report. The reference averages 3.1 s per call.
 
-That was checked rather than assumed: re-running the whole suite under 32
-competing busy loops on 16 cores — roughly a third of a core, a 5x starvation —
-still scores **1.0000**, in 447 s wall against the 780 s deadline. It is also
-how the `cpus = 1` claim was tested, since `taskset` does not exist on the
-authoring host.
+That was checked rather than assumed: the whole suite pinned to a single core
+with `taskset -c 0` still scores **1.0000**, which is what `cpus = 1` in
+`task.toml` claims. The grader runs one child process at a time and never
+threads, so it is a single-core workload by construction.
 
 **Targets are self-calibrating.** Graded streams are synthesised at grading
 time from the run seed, so an absolute ratio target would drift. Every target
 is instead a fraction of what the shipping v1 codec produces *on the same
 bytes*, which `_baseline.py` computes exactly from the byte histogram. Across
-14 seeds the reference's fraction moves by under 1% on every profile.
+six seeds the reference's fraction stays inside a 2.5-point band on every
+profile: logfmt 0.384-0.409, csv 0.427-0.442, jsonl 0.359-0.373, binlog
+0.863-0.869, mixed 0.572-0.577, and the `opaque` ceiling 1.0150-1.0151. The
+targets are 0.52, 0.56, 0.50, 0.92 and 0.65, so the reference sits 21-28%
+inside on the text profiles, 11% on mixed and 6% on binlog — the tightest of
+the five, which is why `binlog` is one of the streams graded at 512 KiB.
 
 **Four structural defences**, each a property of the harness rather than a test
 somebody remembered to write:
@@ -180,6 +243,17 @@ allocates while importing the standard library, which is noise, not design.
 
 The resolution is two figures rather than one — an import footprint and a
 working set, both bounded at 384 KiB — plus graded streams of 512 KiB and
-896 KiB, which are larger than either. Neither budget can absorb a stream, and
+768 KiB, which are larger than either. Neither budget can absorb a stream, and
 the common stdlib modules are pre-imported in the child before tracing starts,
 so nobody is charged for `heapq`.
+
+The import footprint needed one more correction, found while investigating the
+failed upload. It was charging every submission for **compiling its own
+source**: a module imported from a `.py` leaves roughly eight times the source
+size alive that the same module imported from a `.pyc` does, so the 28 KiB
+reference was paying 225 KiB of a 384 KiB budget for nothing but the length of
+its own text, and a submission using the 96 KiB the spec allows could not have
+fitted whatever it did. The grader now byte-compiles the tree it owns once,
+before any call is measured; the reference's import footprint went from
+345,633 B to 121,143 B and the figure now measures what the spec says it
+measures.

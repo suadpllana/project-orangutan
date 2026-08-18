@@ -14,3 +14,7 @@ reward.txt
 reward.json
 score.txt
 score.json
+
+# a verifier run also writes into a `verifier/` subdirectory of each candidate
+tasks/*/bundle/verifier/
+tasks/*/bundle/tests/verifier/

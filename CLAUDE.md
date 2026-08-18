@@ -332,6 +332,61 @@ Two rules make this bulletproof, and both are cheap:
 Then **print where the reward landed**. If every candidate directory is
 read-only you want that in the log, not silence.
 
+### It came back anyway, on a bundle that already did all of that
+
+`zipstream-bounded-memory-codec` was built with the write-everywhere floor above
+and failed **Oracle & nop** with the identical message. Two things were wrong,
+and both generalise:
+
+**1. The floor was being deleted by the grader that depended on it.** A stale
+`reward.txt` containing `1.0` must never be read as a score, so `grade.py`
+opened by *unlinking* every reward artefact in every candidate directory —
+including the 0.0 floor `test.sh` had just written. Everything after that unlink
+was unprotected. **Overwrite a stale reward, never remove it**: the anti-gaming
+requirement is that the value is not the agent's, not that the file is absent,
+and there must be no instant in the trial with no reward on disk. Only unlink a
+file that refuses to be written, and write a fresh one immediately.
+
+While you are there, close the rest of the path:
+
+* write the floor in **POSIX shell**, before the interpreter is even looked
+  for — the previous version's floor was a Python heredoc, so "no python on
+  PATH" meant no reward file at all;
+* `trap` on `EXIT`, `TERM`, `INT`, `HUP` and re-assert it;
+* publish **after every scoring category** (measure the multiplier category
+  first so the partial score stays monotone) — a killed run then reports what
+  it measured instead of nothing;
+* have `test.sh` parse `SCORE:` back out of the grader's own report and write
+  the reward again itself, so the reward does not depend on the grader's writer;
+* write into a **`verifier/` subdirectory** of every candidate as well as the
+  candidates themselves. The platform's message names `verifier/reward.txt`,
+  which reads as a relative path as easily as an absolute one.
+
+**2. The verifier was slow enough to be killed.** `task.toml` claimed 87 s of
+child time; the same suite took **264 s** on an ordinary 2.8 GHz core. A 3x
+spread between two unremarkable machines, against a 1000 s limit, is a coin
+flip. **Measure the verifier on the machine you are on, not on the one you
+measured last time, and treat a claimed timing in a comment as unverified until
+you have re-run it.** Then leave real headroom: the grader's own deadline plus
+one call's cap must be comfortably below `[verifier] timeout_sec`.
+
+If your grading cost is dominated by `tracemalloc`, know the multiplier before
+you design the run: it was **14x** on an allocation-heavy codec here, which
+makes the verifier's runtime proportional to the number of graded bytes. Keep
+the large streams only where the measurement genuinely needs them (the memory
+proof) and grade the scale-free properties — a ratio against a baseline on the
+same bytes, a bound that is a multiple of the input length — on smaller ones.
+That halved the run without weakening a check.
+
+**And do not let a `tracemalloc` budget charge for compiling the submission.**
+Importing a module from `.py` leaves roughly eight times the source size alive
+that importing it from `.pyc` does. Measured here: the same package cost
+345,633 B against a 384 KiB import budget from source and 121,143 B
+precompiled. A grader that copies sources into a scratch tree recompiles on
+every call, so a spec that allows 96 KiB of source and budgets 384 KiB is
+measuring source length, not design. Byte-compile the tree the grader owns
+once, before any measurement.
+
 ## Three things that are easy to get wrong
 
 **A grader that gets killed reports nothing.** Per-category timeouts sum to more

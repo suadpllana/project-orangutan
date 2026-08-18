@@ -45,13 +45,17 @@ objective: |
   2. **The memory budget (§4).** Each call runs in a fresh interpreter with
      `tracemalloc` started before the package is imported. The traced bytes
      alive when the entry point is called must stay under 384 KiB, and the peak
-     during the call, above that baseline, must also stay under 384 KiB. Graded
-     streams are 512 KiB and 896 KiB, so neither buffering the stream during
-     the call nor pre-allocating a buffer at import time fits. The working set
-     must also be independent of stream length: the figure on the 896 KiB
-     stream may exceed the one on the 512 KiB stream by at most 32 KiB.
+     during the call, above that baseline, must also stay under 384 KiB. The
+     package is byte-compiled before any call is measured, so the size of the
+     submission's own source is not charged to it. Graded streams run from
+     192 KiB to 768 KiB and the budget is decided on the 512 KiB and 768 KiB
+     ones, so neither buffering the stream during the call nor pre-allocating a
+     buffer at import time fits. The working set must also be independent of
+     stream length: the figure on the 768 KiB stream may exceed the one on the
+     512 KiB stream by at most 40 KiB.
 
-  3. **The compression targets (§5).** Five 512 KiB profiles — logfmt lines,
+  3. **The compression targets (§5).** Five profiles of 192-512 KiB — logfmt
+     lines,
      CSV metric rows, JSON lines, a binary record format of varints and IEEE
      doubles, and a five-segment mixture — each carry a target expressed as a
      fraction of what the shipping v1 codec produces on the same bytes, which
@@ -63,7 +67,7 @@ objective: |
      way to hit a ratio is a model that collapses everywhere else.
      Incompressible input must expand by no more than `n/64 + 64` bytes;
      base64 payload lines, which carry six bits in every eight-bit byte, must
-     not exceed 1.04× the shipping codec; 512 KiB of one repeated byte must
+     not exceed 1.04× the shipping codec; 192 KiB of one repeated byte must
      compress to under `n/100`, which is eight times below the one-bit-per-
      symbol floor a pure Huffman coder cannot cross; and a stream cycling
      through all 256 byte values must reach `n/10`. §7 adds the complement:
@@ -183,9 +187,9 @@ environmentSummary: |
   `tracemalloc` figure, both of which are exactly reproducible for a given
   submission and seed, so a score does not move with the load on the grading
   host. The only wall-clock numbers anywhere are the safety limits — 120 s per
-  codec call and a 780 s deadline for the whole run — and they exist so a hang
-  costs one measurement rather than the report. The reference averages 1.8 s
-  per call. Memory is measured with `tracemalloc`, which counts Python-level
+  codec call, a 600 s deadline for the whole run and the 1000 s the verifier
+  declares — and they exist so a hang costs one measurement rather than the
+  report. The reference averages 3.1 s per call. Memory is measured with `tracemalloc`, which counts Python-level
   allocations including transients, and is started before the submission is
   imported so a table built at module level is charged rather than forgiven.
 
@@ -242,16 +246,16 @@ oracleStrategy: |
     no smaller than its input is emitted raw, so random data costs three bytes
     per 8 KiB rather than the 6% an entropy coder would add.
 
-  Measured through the real `tests/test.sh` entrypoint at seed 20260818:
+  Measured through the real `tests/test.sh` entrypoint on a 2.8 GHz core:
   **1.0000, PASS**, every one of the 38 checks in all nine categories, 48 codec
-  calls in 87 s of child time. Working set 238,732 B compressing and 155,864 B
-  decompressing against a 393,216 B budget, import footprint 142,940 B, and the
-  working set moves by 144 B between a 512 KiB stream and an 896 KiB one.
-  Ratios 0.2466 (logfmt), 0.2535 (csv), 0.2120 (jsonl), 0.7928 (binlog), 0.4776
-  (mixed); as fractions of the shipping codec that is 0.377, 0.424, 0.346,
-  0.866 and 0.577 against targets of 0.52, 0.56, 0.50, 0.92 and 0.65 — 20–25%
-  inside on the text profiles, 6% on binlog, 11% on mixed, and stable to under
-  1% across 14 seeds.
+  calls in 151 s of child time. Worst working set 305,777 B compressing and
+  219,833 B decompressing against a 393,216 B budget, import footprint
+  121,143 B, and the working set moves by 5.8-14.3 KiB between a 512 KiB stream
+  and a 768 KiB one against an allowed 40,960. As fractions of the shipping
+  codec on the same bytes the reference scores 0.384-0.409 (logfmt),
+  0.427-0.442 (csv), 0.359-0.373 (jsonl), 0.863-0.869 (binlog) and 0.572-0.577
+  (mixed) across six seeds, against targets of 0.52, 0.56, 0.50, 0.92 and 0.65
+  — 21-28% inside on the text profiles, 11% on mixed, 6% on binlog.
 
 verificationStrategy: |
   **The visible half** is `/app/public_tests/test_public.py` — 23 tests that
@@ -381,8 +385,9 @@ anticipatedExploits: |
 
   **Slurp anyway, quietly.** Read the whole stream but allocate the buffer at
   import time so the working set looks flat. *Countermeasure:* the import
-  footprint is measured and bounded at 384 KiB, and graded streams are 512 KiB
-  and 896 KiB, so no buffer that could hold one fits under either figure. The
+  footprint is measured and bounded at 384 KiB, and the streams the budget is
+  decided on are 512 KiB and 768 KiB, so no buffer that could hold one fits
+  under either figure. The
   working set is also required to be independent of stream length, which a
   partial buffering strategy cannot fake.
 
@@ -434,32 +439,93 @@ anticipatedExploits: |
 
   **Pass by not finishing.** An infinite loop or a hang produces no report.
   *Countermeasure:* each codec call is capped at 120 s in its own subprocess
-  and the whole run holds a 780 s deadline; a call that times out or is never
+  and the whole run holds a 600 s deadline; a call that times out or is never
   reached scores zero for every check that depends on it, and the report still
-  prints. The reference averages 1.8 s per call.
+  prints. The reference averages 3.1 s per call, and 600 + 120 is still inside
+  the 1000 s the verifier declares, so the harness never has to kill it.
 
   **Leave a reward file behind.** The agent can write to `/logs`; a
   `reward.txt` containing `1.0` left there before the verifier runs would be
-  indistinguishable from a perfect score. *Countermeasure:* the grader deletes
-  every stale reward artefact from every candidate directory before it does
-  anything else, then publishes a 0.0 floor, then the real score.
+  indistinguishable from a perfect score. *Countermeasure:* every stale reward
+  artefact in every candidate directory is **overwritten** with 0.0 before the
+  grader does anything else, and the real score is written over that at the
+  end. Overwriting rather than deleting matters in the other direction too: a
+  trial must always have a reward file on disk, so nothing in the verifier ever
+  removes one. The floor is written in POSIX shell before the grader starts, a
+  trap re-asserts it on EXIT/TERM/INT/HUP, the grader republishes after every
+  scoring category, and `test.sh` parses the final `SCORE:` back out of the
+  report and writes it again itself.
 
 # ------------------------------------------------------------------- notes
 notes: |
-  Measured on the authoring host (Windows 11, Python 3.14.3, 16 cores), through
-  the real `tests/test.sh` entrypoint unless stated.
+  ## Attempt 1 failed Oracle & nop: "completed without writing a reward file"
 
-  * oracle 1.0000 PASS, 48 codec calls, 87 s child time; nop 0.0000 FAIL, 8 s;
-    LZ-disabled variant 0.7332 FAIL; global-stash cheat, file-stash cheat and a
-    syntax-error submission all 0.0000, each with a reward file written.
+  Structure and similarity passed. The oracle trial is the one that can have
+  failed -- the nop grades in 13 s and ends by publishing 0.000000 -- and two
+  things combined into a verifier that could finish with no reward file:
+
+  * the run was slow enough to be killable. task.toml claimed 87 s of child
+    time, measured on the authoring host; the same suite took 264 s on an
+    ordinary 2.8 GHz core, a 3x spread between two unremarkable machines
+    against a 1000 s verifier limit. A killed container copies nothing out.
+  * grade.py's first act was to UNLINK every stale reward artefact, including
+    the 0.0 floor test.sh had just written. Any kill after that unlink left
+    nothing behind. The one defence against a kill was being deleted by the
+    thing it was defending.
+
+  Fixed by making the reward unremovable and the run shorter:
+
+  * nothing deletes a reward file any more -- a stale value is overwritten in
+    place. The floor is written in POSIX shell (no interpreter needed), a trap
+    re-asserts it on EXIT/TERM/INT/HUP, the grader publishes after every
+    scoring category, and test.sh parses SCORE: back out of the report and
+    republishes it itself. Every candidate directory is written under both
+    names and in a `verifier/` subdirectory, since the platform's message names
+    that path.
+  * the graded byte count is down: every call runs under tracemalloc, which
+    costs ~14x on an allocation-heavy codec, so runtime is proportional to
+    bytes graded. The memory proof keeps its large streams (512 KiB, 768 KiB);
+    the scale-free checks -- a ratio against the shipping codec on the same
+    bytes, a bound that is a multiple of the input length -- moved to 192 KiB.
+    264 s -> 151 s, and the grader's deadline came down from 780 s to 600 s.
+  * verified three ways: a normal run writes 1.000000; a grader exception
+    writes 0.0000 with the traceback in the report; SIGKILL 20 s in leaves
+    0.090000, the categories that had finished, in reward.txt and
+    verifier/reward.txt alike.
+
+  One thing found while investigating, unrelated to the reward file but worse
+  for the task: the import footprint was charging every submission for
+  COMPILING ITS OWN SOURCE. A module imported from .py leaves roughly eight
+  times the source size alive that the same module from .pyc does -- the 28 KiB
+  reference paid 225 KiB of a 384 KiB budget for nothing but the length of its
+  text, and a submission using the 96 KiB the spec allows could not have fitted
+  whatever it actually did. The grader now byte-compiles the tree it owns once,
+  before any call is measured: 345,633 B -> 121,143 B for the reference.
+
+  Also hardened: the regression category, whose pass ratio multiplies the whole
+  score, no longer depends on pytest being importable. If pytest does not
+  collect, `_fallback_pytest.py` runs the same pristine suite with a 100-line
+  stand-in for `raises` and `parametrize` -- 23/23 either way, and 18 of 23
+  broken on a deliberately sabotaged codec, so the fallback still discriminates.
+
+  ## Measurements
+
+  Figures below are from a 2.8 GHz Xeon core (Linux, Python 3.11), through the
+  real `tests/test.sh` entrypoint unless stated. Figures for the wrong-answer
+  variants are from the authoring host (Windows 11, Python 3.14.3).
+
+  * oracle 1.0000 PASS, 48 codec calls, 151 s child time, 154 s wall; nop
+    0.0000 FAIL, 13 s; LZ-disabled variant 0.7332 FAIL; global-stash cheat,
+    file-stash cheat and a syntax-error submission all 0.0000, each with a
+    reward file written.
   * Reference: 29,088 bytes of Python in 8 modules, against a 98,304 cap.
-    Working set 238,732 B compress / 155,864 B decompress against a 393,216 B
-    budget; import footprint 142,940 B; working-set drift between a 512 KiB and
-    an 896 KiB stream, 144 B against an allowed 32,768.
-  * Ratio stability across 14 seeds at 512 KiB, as a fraction of the sealed
-    baseline: logfmt 0.384–0.405, csv 0.410–0.448, jsonl 0.345–0.378, binlog
-    0.863–0.870, mixed 0.568–0.575, opaque 1.0076–1.0077. Targets sit 20–25%
-    above the reference on the text profiles, 5% on binlog, 12% on mixed.
+    Worst working set 305,777 B compress / 219,833 B decompress against a
+    393,216 B budget; import footprint 121,143 B; working-set drift between a
+    512 KiB and a 768 KiB stream, 5,830-14,272 B against an allowed 40,960.
+  * Ratio stability across six seeds, as a fraction of the sealed baseline:
+    logfmt 0.384-0.409, csv 0.427-0.442, jsonl 0.359-0.373, binlog
+    0.863-0.869, mixed 0.572-0.577, opaque 1.0150-1.0151. Targets sit 21-28%
+    above the reference on the text profiles, 6% on binlog, 11% on mixed.
   * `_corpus._mixed` deliberately uses a FIXED segment plan and varies only the
     vocabulary. The first version shuffled the profile order too, and the
     reference's fraction of baseline then ranged 0.506–0.681 across seeds,
@@ -490,14 +556,11 @@ notes: |
     the seed works *and* is still inadequate — was run directly against the
     starter and passes; the visible suite was run directly and passes 23/23.
     Build the image once before submitting.
-  * **`taskset` does not exist here** (Windows), so the `cpus = 1` claim was
-    checked by starvation rather than by pinning: the full suite was re-run
-    under 32 competing busy loops on 16 cores -- roughly a third of a core --
-    and still scored **1.0000**, in 447 s wall against the grader's 780 s
-    deadline. The verifier runs one child process at a time and never threads,
-    so it is a single-core workload by construction; on a dedicated core it
-    takes about 90 s.
+  * The `cpus = 1` claim was checked by pinning: the full suite run under
+    `taskset -c 0` still scores **1.0000**. The verifier runs one child process
+    at a time and never threads, so it is a single-core workload by
+    construction.
   * `[verifier] timeout_sec = 1000` against a 1200 s form default, and the
-    grader's own deadline is 780 s. The reference needs 90 s, so the margin is
-    about 8x; a submission an order of magnitude slower than the reference
-    still finishes.
+    grader's own deadline is 600 s with a 120 s cap on any one call, so
+    600 + 120 = 720 < 1000 and the harness never has to kill the verifier. The
+    reference needs 151 s, so the margin over it is about 6.5x.
