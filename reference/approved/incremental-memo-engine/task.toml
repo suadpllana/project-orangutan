@@ -1,0 +1,44 @@
+[metadata]
+name = "incremental-memo-engine"
+title = "Incremental computation engine with early cutoff"
+description = """
+Implement the query-engine core that sits underneath a build system or a
+language server: memoized derived queries over mutable inputs, red/green
+revision verification, early cutoff, dynamic dependencies, memoized failures,
+cycle detection, a durable on-disk cache, and 20k-deep dependency chains.
+Correct values are not enough -- the grader counts every query-body execution
+and requires the recomputation to be exactly minimal.
+"""
+tags = ["library-clone", "incremental-computation", "caching", "algorithms", "python"]
+collection_family = "library_clone"
+task_family = "feature_development"
+verifier_family = "programmatic"
+difficulty = "hard"
+expert_time_estimate_hours = 9
+version = "1.0.0"
+
+[agent]
+# The rollout is fully sealed: everything the task needs is baked into the image.
+network_mode = "none"
+# Deliberately below the draft's 14400s envelope; the bundle must never ask for
+# more than the draft declares.
+timeout_sec = 14000
+
+[verifier]
+entrypoint = "tests/test.sh"
+network_mode = "none"
+# The suite takes ~4s against the reference; 600s is 140x headroom and sits well
+# below the draft's 1200s envelope.
+timeout_sec = 600
+# Continuous, weighted score in [0, 1]; written to /logs/reward.txt and
+# /logs/score.json.  Exit status 0 means the score reached the threshold.
+reward_file = "/logs/reward.txt"
+pass_threshold = 0.85
+
+[environment]
+dockerfile = "environment/Dockerfile"
+build_context = "environment"
+cpus = 2
+memory_mb = 4096
+storage_mb = 8192
+gpus = 0

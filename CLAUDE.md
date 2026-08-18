@@ -8,8 +8,19 @@ verifier. Authoring one means producing two things:
 * a **task bundle** — a ZIP in the Terminal-Bench / Harbor format holding the
   actual environment, verifier and reference solution (`bundle/` here).
 
-Read this file first. `docs/` has the details; `docs/submission-funnel.md`
-describes what happens after you submit and what the reviewer is looking for.
+## Read these two things before you write anything
+
+1. **`docs/guideline.md`** — the official authoring guideline, verbatim. Every
+   rule, bound and enum comes from there. Where any doc in this repository
+   disagrees with it, the guideline wins and the doc is the bug.
+2. **`reference/approved/incremental-memo-engine/`** — a bundle that was
+   *approved*. It is the only ground truth here for what the platform actually
+   accepts. Read its `task.toml`, `tests/test.sh`, `tests/grade.py` and
+   `solution/solve.sh` before writing your own, and copy the shape. Guessing
+   this schema instead of reading it cost this repository four rejected uploads.
+
+Then this file, then `docs/`. `docs/submission-funnel.md` describes what happens
+after you submit and what the reviewer is looking for.
 
 ---
 
@@ -18,7 +29,10 @@ describes what happens after you submit and what the reviewer is looking for.
 ```
 CLAUDE.md                  this file
 README.md                  orientation
+reference/
+  approved/                a bundle that passed - the schema ground truth
 docs/
+  guideline.md             the official guideline, verbatim - read first
   draft-fields.md          the draft: fields, bounds, enums
   bundle-format.md         the ZIP: required paths, task.toml, network phases
   submission-funnel.md     two-phase submission, the funnel stages, the review bar
@@ -60,14 +74,17 @@ python3 tools/render_submission.py --all --check     # fail if stale
 python3 tools/build_bundle.py --all                  # dist/<slug>.zip
 
 # reproduce the funnel's oracle & nop stage
-cp -r tasks/<slug>/bundle/environment/<workspace files> /tmp/app
-APP_DIR=/tmp/app bash tasks/<slug>/bundle/solution/solve.sh
-SUBMISSION_DIR=/tmp/app bash tasks/<slug>/bundle/tests/test.sh     # oracle: 1.0
-SUBMISSION_DIR=/tmp/pristine bash tasks/<slug>/bundle/tests/test.sh # nop: floor
+mkdir -p /tmp/app /tmp/logs
+cp -r tasks/<slug>/bundle/environment/<starter files> /tmp/app/
+IMPL_ROOT=/tmp/app bash tasks/<slug>/bundle/solution/solve.sh
+IMPL_ROOT=/tmp/app LOG_DIR=/tmp/logs bash tasks/<slug>/bundle/tests/test.sh
+IMPL_ROOT=/tmp/pristine LOG_DIR=/tmp/logs bash tasks/<slug>/bundle/tests/test.sh
 ```
 
-`tests/test.sh` exits 0 only when the binary success condition is met, and
-prints `REWARD <score>` and `BINARY_PASS <true|false>`.
+`tests/test.sh` writes the score to `$LOG_DIR/reward.txt` and exits 0 only at or
+above `[verifier] pass_threshold`, printing `SCORE`, `THRESHOLD` and `RESULT`.
+The oracle must reach full reward; the untouched starting state must sit at its
+floor.
 
 ## Conventions
 
@@ -262,16 +279,53 @@ noise. The converse too: every MUST needs a test, or it is decoration.
 
 ---
 
+## UNRESOLVED: "resource declaration mismatch"
+
+**A task that is otherwise complete and verified was abandoned on this error.**
+If you hit it, do not repeat the four attempts below — they are all ruled out.
+
+`tasks/minikv-snapshot-isolation-wal` reached oracle 1.0000 / nop 0.0000 and was
+rejected at intake four times with `Bundle rejected: resource declaration
+mismatch`. The draft, read back from the form by the submitter, was
+`cpuMillis 2000, memoryMb 4096, storageMb 8192, gpuCount 0,
+agentTimeoutSec 14400, verifierTimeoutSec 1200`.
+
+What was tried, and eliminated:
+
+| attempt | `[environment]` | timeouts | resources | result |
+| --- | --- | --- | --- | --- |
+| 1 | `network_mode = "open"`, no `dockerfile`/`build_context` | equal to draft | equal to draft | rejected |
+| 2 | `network_mode` removed, `dockerfile` + `build_context` added | below draft | equal to draft | rejected |
+| 3 | same as 2 | below draft | equal to draft | rejected |
+| 4 | same as 2 | below draft | **below** draft (1 / 2048 / 4096) | rejected |
+
+So the `[environment]` shape, both timeout relationships, and both resource
+relationships have each been tested in more than one configuration, and the
+error never moved. A parsed and a byte-level skeleton comparison both show the
+final `task.toml` is **identical in tables, keys and key order** to the approved
+bundle in `reference/`, differing only in `name`, `title`, `description`, `tags`
+and `expert_time_estimate_hours`.
+
+What was never checked, and is where to look next:
+
+* **`expert_time_estimate_hours`** — the only `task.toml` field duplicated in the
+  draft that was never read back from the form. Everything else was confirmed.
+* Whether the uploaded ZIP was the one just built. Every send has the same
+  filename; `build_bundle.py` now prints a `sha256:` fingerprint for exactly this
+  reason, but the correspondence was never confirmed for the later uploads.
+* Whether the platform means something by "resource" that is not in
+  `[environment]` at all.
+
+The honest next step is asking the platform which field it compares, not shipping
+another variation. Four uploads were spent on inference; a single answer would
+have cost none.
+
 ## Known gaps
 
 * `https://project-orangutan-guideline.edgeone.dev/` is blocked by this
-  environment's egress policy (403 on CONNECT). The docs here were reconciled
-  against the guideline text pasted into the session on 2026-08-17. If the
-  guideline changes, re-reconcile rather than trusting these files.
-* `[environment] network_mode = "open"` in `task.toml` is the build phase, which
-  the guideline says is not gated — but the accepted value there is the one
-  thing in the bundle that could not be checked against a published enum. It is
-  flagged in the task's `notes`.
+  environment's egress policy (403 on CONNECT). `docs/guideline.md` is the
+  verbatim text, pasted into the session on 2026-08-18. If the guideline
+  changes, re-paste it and re-reconcile rather than trusting these files.
 * The rubric judge's criteria are known only in outline (clarity, specification
   completeness, whether the verifier measures the objective, anti-gaming
   adequacy). `docs/quality-checklist.md` targets them from that outline.
