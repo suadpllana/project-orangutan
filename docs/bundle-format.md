@@ -140,12 +140,25 @@ Two rejections to avoid:
 * A rollout the file seals (`none`) while your draft asks for `allowlist` hosts.
   The two must agree.
 
-### Resources must agree with the draft
+### Resources must ask for strictly less than the draft
 
 The `[environment]` figures (`cpus`, `memory_mb`, `storage_mb`, `gpus`) are
-checked against the sandbox budget *and* against your draft. **The bundle may
-ask for less than the draft, never more.** A stale value is rejected rather than
-ignored.
+checked against the sandbox budget *and* against your draft. "May ask for less,
+never more" means **less**: a bundle whose resources exactly equalled its draft
+was rejected as `resource declaration mismatch` three times running, and the
+same bundle cleared intake the moment they were lowered.
+
+```toml
+# draft: cpuMillis 2000, memoryMb 4096, storageMb 8192, gpuCount 0
+cpus = 1            # not 2
+memory_mb = 2048    # not 4096
+storage_mb = 4096   # not 8192
+gpus = 0            # the one field that stays equal - it cannot go lower
+```
+
+Declare what the task actually needs and measure to back it: pin the suite to one
+core with `taskset -c 0` before claiming `cpus = 1`. The same discipline already
+applied to the timeouts, which the approved bundle sets below its draft too.
 
 `tools/check_bundle.py` reproduces all of these cross-checks locally.
 

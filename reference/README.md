@@ -21,6 +21,15 @@ Read `task.toml`, `tests/test.sh`, `tests/grade.py` and `solution/solve.sh`
 before writing your own. Copy the *shape*; never copy the content — the
 similarity stage rejects near-duplicates, and the whole point is a novel task.
 
+> **⚠ You are looking at half of a submission.** This is the bundle; its draft is
+> not here and cannot be recovered. So its `cpus = 2 / memory_mb = 4096 /
+> storage_mb = 8192` tells you **nothing** about whether equality with a draft is
+> accepted — its draft almost certainly declared a larger envelope, exactly as
+> its `timeout_sec = 14000` sits below the 14400 its own comment names. Treating
+> those numbers as evidence for equality is what cost four rejected uploads.
+> **Your `[environment]` must ask for strictly less than your draft** (`gpus`
+> excepted, which stays 0). See the SOLVED section in `CLAUDE.md`.
+
 Worth studying beyond the schema:
 
 * `tests/test.sh` and `solution/solve.sh` resolve `IMPL_ROOT` / `LOG_DIR` from

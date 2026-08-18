@@ -279,46 +279,64 @@ noise. The converse too: every MUST needs a test, or it is decoration.
 
 ---
 
-## UNRESOLVED: "resource declaration mismatch"
+## SOLVED: "resource declaration mismatch" — ask for strictly less
 
-**A task that is otherwise complete and verified was abandoned on this error.**
-If you hit it, do not repeat the four attempts below — they are all ruled out.
+`tasks/minikv-snapshot-isolation-wal` was rejected at intake **four times** with
+`Bundle rejected: resource declaration mismatch`. The fix, confirmed by the
+bundle then clearing **Bundle structure** and **Similarity screening**:
 
-`tasks/minikv-snapshot-isolation-wal` reached oracle 1.0000 / nop 0.0000 and was
-rejected at intake four times with `Bundle rejected: resource declaration
-mismatch`. The draft, read back from the form by the submitter, was
-`cpuMillis 2000, memoryMb 4096, storageMb 8192, gpuCount 0,
-agentTimeoutSec 14400, verifierTimeoutSec 1200`.
+> **`[environment]` must ask for strictly LESS than the draft's
+> `resourceEstimate` — not equal to it.** `gpus` is the sole exception and stays
+> at `0`, because it cannot go lower.
 
-What was tried, and eliminated:
+```toml
+# draft: cpuMillis 2000, memoryMb 4096, storageMb 8192, gpuCount 0
+[environment]
+cpus = 1            # not 2
+memory_mb = 2048    # not 4096
+storage_mb = 4096   # not 8192
+gpus = 0            # equal is fine here, and only here
+```
 
-| attempt | `[environment]` | timeouts | resources | result |
-| --- | --- | --- | --- | --- |
-| 1 | `network_mode = "open"`, no `dockerfile`/`build_context` | equal to draft | equal to draft | rejected |
-| 2 | `network_mode` removed, `dockerfile` + `build_context` added | below draft | equal to draft | rejected |
-| 3 | same as 2 | below draft | equal to draft | rejected |
-| 4 | same as 2 | below draft | **below** draft (1 / 2048 / 4096) | rejected |
+The guideline's "may ask for less, never more" turns out to mean *less*, and
+that reading applies to the resources exactly as it already visibly applied to
+the timeouts. Declare what the task genuinely needs and prove it — the minikv
+suite was re-run pinned to one core with `taskset -c 0` (117/117, every budget
+met) before claiming `cpus = 1`.
 
-So the `[environment]` shape, both timeout relationships, and both resource
-relationships have each been tested in more than one configuration, and the
-error never moved. A parsed and a byte-level skeleton comparison both show the
-final `task.toml` is **identical in tables, keys and key order** to the approved
-bundle in `reference/`, differing only in `name`, `title`, `description`, `tags`
-and `expert_time_estimate_hours`.
+### How it was found, which is the transferable part
 
-What was never checked, and is where to look next:
+Three fixes had already been tried and had not moved the error. Instead of
+guessing a fourth, tabulate what each rejected upload actually declared and look
+for the variable that never varied:
 
-* **`expert_time_estimate_hours`** — the only `task.toml` field duplicated in the
-  draft that was never read back from the form. Everything else was confirmed.
-* Whether the uploaded ZIP was the one just built. Every send has the same
-  filename; `build_bundle.py` now prints a `sha256:` fingerprint for exactly this
-  reason, but the correspondence was never confirmed for the later uploads.
-* Whether the platform means something by "resource" that is not in
-  `[environment]` at all.
+| attempt | `[environment]` shape | timeouts | resources |
+| --- | --- | --- | --- |
+| 1 | `network_mode = "open"`, no `dockerfile`/`build_context` | equal | **equal** |
+| 2 | `network_mode` removed, `dockerfile`+`build_context` added | below | **equal** |
+| 3 | same as 2 | below | **equal** |
 
-The honest next step is asking the platform which field it compares, not shipping
-another variation. Four uploads were spent on inference; a single answer would
-have cost none.
+Everything changed between attempts except the resources. The `[environment]`
+shape and both timeout relationships had each been tested in two configurations
+and were therefore exonerated; equality on the resources was the only constant.
+**When several fixes in a row do not move an error, stop proposing causes and
+start eliminating them: the answer is the column you never changed.**
+
+### The trap that cost the extra attempts
+
+`reference/approved/incremental-memo-engine/task.toml` declares
+`cpus = 2 / memory_mb = 4096 / storage_mb = 8192`, which looks like proof that
+equality is accepted — and on that basis a correct strictly-below build was
+reverted before it was ever uploaded. **You only ever see an approved
+submission's bundle, never its draft.** Its draft almost certainly declared a
+larger envelope, exactly as its `timeout_sec = 14000` sits below a stated 14400.
+Never reason from half of an artifact pair as though you had both.
+
+### Confirmed at intake
+
+Bundle structure ✅ · Similarity screening ✅ · Oracle & nop — running at the time
+of writing. Everything downstream of intake (the rubric judge, the difficulty
+probe, human review) is still unproven for this task.
 
 ## Known gaps
 
