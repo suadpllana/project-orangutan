@@ -63,20 +63,30 @@ whole submission's cost to being clever.
 3. **Never create a directory just to empty it.** `clear_stale_rewards()` must
    skip roots that do not already exist, or widening the net turns a read-only
    mount into a new failure mode.
-4. **Overwrite a stale reward — never unlink it.** The agent can write to
-   `/logs`, so a `reward.txt` containing `1.0` left behind before the verifier
-   runs must never be read as a score. The instinct is to delete it first. Do
-   not: `zipstream-bounded-memory-codec` shipped with everything else on this
-   page and still failed Oracle & nop, because `grade.py` opened by unlinking
-   every reward artefact — **including the `0.0` floor `test.sh` had just
-   written** — leaving everything after that unlink unprotected. The
-   anti-gaming requirement is that the value is not the agent's, not that the
-   file is absent. There must be no instant in the trial with no reward on
-   disk. Only unlink a file that *refuses* to be written, and write a fresh one
-   immediately.
+4. **Delete stale reward artefacts before writing the floor.** The agent can
+   write to `/logs`; a `reward.txt` containing `1.0` left behind before the
+   verifier runs is otherwise indistinguishable from a perfect score. Clear
+   them, then republish the floor immediately, in the same process, with no I/O
+   in between. This is what `pkgsolve` does and it **passed Oracle & nop**.
+
 5. **Print every location that accepted the file and every one that refused
    it.** Both failures above were silent, which is why the second one had to be
    reasoned about instead of read off a log.
+### Unverified hardening
+
+The rest of this list comes from `zipstream-bounded-memory-codec`, which failed
+Oracle & nop and **has not been resubmitted since these changes**. None of it is
+confirmed by a stage result. Treat it as a sensible belt-and-braces list for a
+*new* verifier, and do not retrofit it onto one that has already passed without
+re-running the stage.
+
+In particular, that bundle's authors concluded that *unlinking* the stale reward
+is itself the bug, because it leaves an instant with no reward on disk, and
+recommend overwriting instead. That contradicts rule 4, which is the rule a
+passing submission actually used. If you are writing a verifier from scratch,
+overwriting is strictly safer and costs nothing; if you have one that passed, do
+not change it on this basis alone.
+
 6. **Write the floor in POSIX shell, before the interpreter is even looked
    for.** A floor written by a Python heredoc is no floor at all when the
    failure mode is "no python on PATH".
@@ -145,8 +155,9 @@ find . -not -path './.git/*' -type d -name verifier -exec rm -rf {} +
       named in `[verifier] reward_file`.
 - [ ] A `0.0` floor is published from `test.sh` **and** from `grade.py`, before
       any grading.
-- [ ] Stale rewards are **overwritten, not unlinked**, and nothing creates a
-      directory just to empty it.
+- [ ] Stale rewards are cleared and the floor republished immediately, and
+      nothing creates a directory just to empty it. (Overwriting instead of
+      unlinking is safer still, but is unverified — see above.)
 - [ ] The floor is written in POSIX shell before the interpreter is looked
       for, a `trap` re-asserts it, and the reward is republished after every
       scoring category.

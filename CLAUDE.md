@@ -102,6 +102,23 @@ floor.
   folder.** After scaffolding a task, run `python3 tools/build_bundle.py --all`
   and place the current archive as `tasks/<slug>/<slug>.zip` so the bundle sits
   beside its source and can be handed off without hunting through `dist/`.
+* **Three people work on this repository. `git pull` before you touch anything,
+  and again before every push.** Branches move under you: PR #1 forked before
+  three commits that fixed the same class of bug from the other direction, and
+  the auto-merge silently glued a stale comment into `draft.yaml` and left two
+  documents contradicting each other. A pull at the start of a session is one
+  command; reconciling a week of divergence is not.
+* **A chat that creates or fixes a task is named after that task's ZIP**, e.g.
+  `pkgsolve-resolver-explanations` — no prefix, no description, exactly the
+  slug. It is how a session is matched to the artifact it produced when three
+  people are submitting from three machines.
+* **Distinguish what passed a stage from what you believe.** A finding is
+  *verified* only when the platform ran it and the stage went green; anything
+  else is a hypothesis, however well argued. Label it, and never let a
+  hypothesis rewrite a rule that a passing submission actually used. This
+  happened: the account in PR #1 was allowed to overturn the reward-file rule
+  that `pkgsolve` had just cleared Oracle & nop with, and that bundle has still
+  not been resubmitted.
 * **Write the draft fields last**, when their numbers are measurements rather
   than intentions.
 * Only `notes` and `schema_version` in `draft.yaml` are not form fields.
@@ -357,11 +374,12 @@ Four rules make it hold, and all four are cheap:
    from `grade.py`, over that whole net.
 2. **Wrap the grading run in `except BaseException`** and publish on the way
    out. A grader that dies without a reward is reported as a verifier bug.
-3. **Never create a directory just to empty it, and prefer not to empty it at
-   all.** `clear_stale_rewards` skips roots that do not already exist, so
-   widening the net cannot turn a read-only mount into a failure — but *deleting*
-   a stale reward is itself the next bug on this list: see "It came back anyway"
-   below. Overwrite; only unlink a file that refuses to be written.
+3. **Never create a directory just to empty it.** `clear_stale_rewards` skips
+   roots that do not already exist, so widening the net cannot turn a read-only
+   mount into a failure. Clearing a stale reward and immediately republishing
+   the floor is what `pkgsolve` does and it **passed Oracle & nop**; see the
+   unverified note below for a stricter variant that has not been through the
+   stage yet.
 4. **Print every location that took the file and every one that refused it.**
    Both failures above were silent, which is why the second one had to be
    reasoned about instead of read off a log. `test.sh` now prints `$PWD`, the
@@ -383,11 +401,19 @@ the three-way verification recipe and the pre-submit checklist. Copy the
 mechanism from `tasks/pkgsolve-resolver-explanations/bundle/tests/`; do not
 re-derive it.
 
-### It came back anyway, on a bundle that already did all of that
+### Unverified: a stricter variant, from a bundle that has not been submitted
 
-`zipstream-bounded-memory-codec` was built with the write-everywhere floor above
-and failed **Oracle & nop** with the identical message. Two things were wrong,
-and both generalise:
+> **Status: NOT confirmed at intake.** Everything above is what
+> `pkgsolve-resolver-explanations` actually shipped, and it **passed Oracle &
+> nop**. What follows comes from `zipstream-bounded-memory-codec`, which failed
+> that stage *before* these changes and **has not been resubmitted since**. It
+> is a plausible hardening, not a proven cause. Do not weaken the section above
+> on the strength of it, and do not rewrite a passing verifier to match it
+> without re-running the stage.
+
+`zipstream-bounded-memory-codec` was built with a write-everywhere floor and
+failed **Oracle & nop** with the identical message. Two things were suspected,
+and both would generalise if confirmed:
 
 **1. The floor was being deleted by the grader that depended on it.** A stale
 `reward.txt` containing `1.0` must never be read as a score, so `grade.py`
