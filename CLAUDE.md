@@ -300,37 +300,62 @@ was not warned about. `docs/exploit-catalog.md` has the full table.
 
 ---
 
-## SOLVED: "completed without writing a reward file"
+## "completed without writing a reward file" — twice, and the fix was wrong
 
-Oracle & nop failed with:
+Oracle & nop has failed twice with:
 
 > Your verifier completed without writing a reward file
 > (`verifier/reward.txt` or `reward.json`) — **every trial must produce one.**
 
-The grader was writing `/logs/reward.txt`, `/logs/score.json` and a copy beside
-itself. It never wrote a file *named* `reward.json`, and never into a
-`verifier/` directory. Where the harness mounts the sealed suite is not knowable
-from inside the bundle, so do not try to guess it — write everywhere, under both
-names:
+**Read the two paths in that message.** `verifier/reward.txt` is written
+*relative* and carries a directory component; `reward.json` is written relative
+with none. They are two paths under one root the message never names.
 
-```python
-LOG_DIR, /logs, /verifier, /tests, <dir of grade.py>, its parent, CWD, /tmp
-  x  reward.txt, reward.json, score.txt, score.json
+The first fix read it as naming two *absolute* locations and wrote to a list of
+absolute directories — `LOG_DIR, /logs, /verifier, /tests, <dir of grade.py>,
+its parent, CWD, /tmp` × `reward.txt, reward.json, score.txt, score.json`. That
+covers `verifier/reward.txt` **only if the unnamed root happens to be `/`**. It
+was recorded here as SOLVED while the stage was still running; it was not. The
+identical rejection came back on the next task.
+
+### What actually works
+
+Take every plausible root, and under each write the reward **both at the root
+and inside a `verifier/` subdirectory of it**:
+
+```
+roots:  $LOG_DIR, $REWARD_DIR, $VERIFIER_DIR, $OUTPUT_DIR, $OUTPUTS_DIR,
+        $RESULTS_DIR, $RESULT_DIR, $TEST_OUTPUT_DIR,
+        /logs /verifier /tests /output /outputs /results /app /workspace
+        <dir of grade.py>, its parent, $PWD, $PWD/.., /tmp /var/tmp /
+each x   {"", "/verifier"}
+each x   reward.txt, reward.json, score.txt, score.json
 ```
 
-Two rules make this bulletproof, and both are cheap:
+Four rules make it hold, and all four are cheap:
 
 1. **Publish a `0.0` floor before grading starts**, from `test.sh` *and* again
-   from `grade.py`. A verifier that is killed, hangs, or raises on its first
-   line then still leaves a reward behind. Verified three ways: normal run
-   writes `1.000000`, a grader exception writes `0.000000`, and `SIGKILL` three
-   seconds in leaves `0.000000`.
-2. **Wrap the whole grading run in `except BaseException`** and publish `0.0`
-   on the way out. A grader that dies without a reward is reported as a verifier
-   bug, not as a failed submission — you lose the attempt either way.
+   from `grade.py`, over that whole net.
+2. **Wrap the grading run in `except BaseException`** and publish on the way
+   out. A grader that dies without a reward is reported as a verifier bug.
+3. **Never create a directory just to empty it.** `clear_stale_rewards` skips
+   roots that do not already exist, so widening the net cannot turn a read-only
+   mount into a failure.
+4. **Print every location that took the file and every one that refused it.**
+   Both failures above were silent, which is why the second one had to be
+   reasoned about instead of read off a log. `test.sh` now prints `$PWD`, the
+   suite directory and both lists before it does anything else.
 
-Then **print where the reward landed**. If every candidate directory is
-read-only you want that in the log, not silence.
+Verified three ways with `LOG_DIR` unset and `/logs` unwritable, so that the
+working directory is the only place that will take a file: a normal run leaves
+`1.000000` in `./reward.json` and `./verifier/reward.txt`, an exception inside
+`grade()` leaves `0.000000` in both, and `SIGKILL` three seconds in leaves
+`0.000000` in both.
+
+**A local grader run now scatters `reward.*` and `verifier/` directories through
+the working tree**, including inside `bundle/`. `build_bundle.py` skips both and
+`check_bundle.py` warns about them, because shipping a stale score inside the
+archive would be worse than the bug this fixed.
 
 ## Three things that are easy to get wrong
 

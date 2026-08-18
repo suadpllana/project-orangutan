@@ -275,26 +275,78 @@ def clear_stale_rewards() -> None:
                 print(f"WARNING: could not clear a pre-existing {path}", flush=True)
 
 
+# Environment variables the harness might use to name its output directory.
+# Only these names are read, and only their values are printed -- the rest of
+# the environment is never touched, let alone logged.
+REWARD_ENV_VARS = (
+    "LOG_DIR",
+    "REWARD_DIR",
+    "REWARD_PATH",
+    "REWARD_FILE",
+    "VERIFIER_DIR",
+    "OUTPUT_DIR",
+    "OUTPUTS_DIR",
+    "RESULTS_DIR",
+    "RESULT_DIR",
+    "TEST_OUTPUT_DIR",
+)
+
+REWARD_BASENAMES = ("reward.txt", "reward.json", "score.txt", "score.json")
+
+
 def reward_dirs() -> List[Path]:
     """Every directory the harness might look in for a reward file.
 
     The rejection that taught us this said: "Your verifier completed without
     writing a reward file (verifier/reward.txt or reward.json) - every trial
-    must produce one." Where the harness mounts the sealed suite is not
-    knowable from inside the bundle, so write to all of them. They are cheap.
+    must produce one." Note that `verifier/reward.txt` is written RELATIVE and
+    carries a directory component while `reward.json` does not: they are two
+    paths under one root the message never names. Writing only the absolute
+    `/verifier` covers that root only when it happens to be `/`, which is why
+    the same rejection came back a second time.
+
+    So: take every plausible root, and under each of them write both at the root
+    itself and inside a `verifier/` subdirectory. They are four-byte files.
     """
-    candidates = [
-        LOG_DIR,                 # whatever [verifier] reward_file points at
-        Path("/logs"),
-        Path("/verifier"),
-        Path("/tests"),
-        HERE,                    # next to grade.py, wherever that landed
-        HERE.parent,
-        Path.cwd(),
-        Path("/tmp"),            # last resort: somewhere always writable
-    ]
+    roots: List[Path] = []
+
+    def add(value) -> None:
+        if not value:
+            return
+        try:
+            roots.append(Path(value))
+        except (TypeError, ValueError):
+            return
+
+    # Anything the harness told us about, first.
+    for name in REWARD_ENV_VARS:
+        value = os.environ.get(name)
+        if not value:
+            continue
+        candidate = Path(value)
+        # REWARD_FILE / REWARD_PATH may name the file rather than the directory.
+        add(candidate.parent if candidate.suffix else candidate)
+
+    add(LOG_DIR)
+    for fixed in ("/logs", "/verifier", "/tests", "/output", "/outputs",
+                  "/results", "/app", "/workspace", "/tmp", "/var/tmp", "/"):
+        add(fixed)
+    add(HERE)                    # next to grade.py, wherever that landed
+    add(HERE.parent)             # the bundle root
+    try:
+        add(Path.cwd())
+        add(Path.cwd().parent)
+    except OSError:
+        pass
+
+    # Each root twice: at the root, and in a `verifier/` subdirectory of it.
+    expanded: List[Path] = []
+    for root in roots:
+        expanded.append(root)
+        expanded.append(root / "verifier")
+
     seen, unique = set(), []
-    for path in candidates:
+    for path in expanded:
         try:
             resolved = path.resolve()
         except OSError:
@@ -305,7 +357,26 @@ def reward_dirs() -> List[Path]:
     return unique
 
 
-def publish_reward(score: float, report: Dict | None = None) -> None:
+def clear_stale_rewards() -> None:
+    """Delete any reward artefact that existed before this run.
+
+    The agent can write to /logs. Without this, pre-creating reward.txt with
+    1.0 would be a way to be scored without solving anything.
+    """
+    for directory in reward_dirs():
+        if not directory.is_dir():
+            continue          # never create a directory just to empty it
+        for name in REWARD_BASENAMES + ("junit.xml",):
+            path = directory / name
+            try:
+                if path.exists():
+                    os.chmod(path, 0o644)
+                    path.unlink()
+            except OSError:
+                print(f"WARNING: could not clear a pre-existing {path}", flush=True)
+
+
+def publish_reward(score: float, report=None) -> None:
     """Write reward.txt AND reward.json everywhere the harness might read.
 
     Called once with 0.0 before any grading starts, so that a crash, a hang or
@@ -319,15 +390,22 @@ def publish_reward(score: float, report: Dict | None = None) -> None:
         {
             "reward": score,
             "score": score,
-            "passed": bool(report["passed"]) if report and "passed" in report else score >= PASS_THRESHOLD,
+            "passed": bool(report["passed"]) if report and "passed" in report
+            else score >= PASS_THRESHOLD,
             "threshold": PASS_THRESHOLD,
         },
         indent=2,
     )
     detail = json.dumps(report, indent=2) if report is not None else blob
 
-    written = []
+    written, refused = [], []
     for directory in reward_dirs():
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            refused.append("%s (%s)" % (directory, exc.strerror or exc))
+            continue
+        landed = False
         for name, payload in (
             ("reward.txt", text),
             ("reward.json", blob),
@@ -335,23 +413,32 @@ def publish_reward(score: float, report: Dict | None = None) -> None:
             ("score.json", detail),
         ):
             try:
-                directory.mkdir(parents=True, exist_ok=True)
                 (directory / name).write_text(payload)
-                if name == "reward.txt":
-                    written.append(str(directory))
+                landed = True
             except (OSError, ValueError):
                 continue
+        if landed:
+            written.append(str(directory))
+        else:
+            refused.append("%s (not writable)" % (directory,))
 
-    # Say where the reward landed. A run that reaches here having written
-    # nowhere is a read-only-mount problem, and silence would hide it.
+    # Say where the reward landed, and where it could not. A run that reaches
+    # here having written nowhere is a read-only-mount problem, and silence
+    # would hide it -- which is exactly how this cost two submissions.
     if written:
-        print(f"reward {score:.6f} written to: {', '.join(written)}", flush=True)
+        print(
+            "reward %.6f written to %d location(s): %s"
+            % (score, len(written), ", ".join(written)),
+            flush=True,
+        )
     else:
         print(
             "ERROR: could not write a reward file anywhere - every candidate "
             "directory was unwritable",
             flush=True,
         )
+    if refused:
+        print("         not writable: %s" % (", ".join(refused[:12]),), flush=True)
 
 
 def grade(submission: Path, deadline_seconds: float = DEFAULT_DEADLINE) -> Dict:
