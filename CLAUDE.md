@@ -145,14 +145,38 @@ and the result had the right task inside the wrong container: no `task.toml`, no
 half the metadata did not. If a source you were pointed at is unreachable, stop
 and say so — do not infer a spec you were told exists.
 
-**2. Check the artifact you are shipping, not the directory it came from.** The
-first upload of the minikv bundle was rejected at inspection for "required file
-missing" with all five required files present — one directory too deep, because
-`build_bundle.py` wrapped the archive in a `<slug>/` directory. Every check in
-this repository looked at `bundle/` on disk and passed. The required paths are
-relative to the **archive root**; the guideline's `my-task/` diagram is the
-directory whose contents you zip. `build_bundle.py` now re-opens the ZIP and
-asserts the five paths before reporting success.
+**2. Check the artifact the platform opens, not the one you wrote.** "Required
+file missing" has now been hit twice, by two different mechanisms that look
+identical from the outside. Both put the five required paths one directory too
+deep.
+
+*Mechanism 1 — the build.* `build_bundle.py` used to wrap the archive in a
+`<slug>/` directory. Every check in this repository looked at `bundle/` on disk
+and passed. The required paths are relative to the **archive root**; the
+guideline's `my-task/` diagram is the directory whose contents you zip.
+`build_bundle.py` now re-opens the ZIP and asserts the five paths before
+reporting success.
+
+*Mechanism 2 — the download.* macOS expands a downloaded `.zip` automatically
+(Safari's "Open safe files after downloading" is on by default), so what is left
+on disk is a **folder**. Right-clicking it and choosing Compress rebuilds the
+`<slug>/` wrapper and adds a `__MACOSX/` tree and `.DS_Store` on top — 79
+entries where the original had 35, and not one required path at the root. This
+is what rejected `pkgsolve-resolver-explanations`, whose shipped archive was
+correct: repairing the re-compressed upload reproduced the *identical* sha256.
+`build_bundle.py`'s own verification cannot see this, because it ends at the
+filesystem the file was written to.
+
+**So verify the file that is actually being uploaded**:
+
+```bash
+python3 tools/verify_zip.py <the-file-you-are-about-to-upload.zip>
+python3 tools/verify_zip.py <that-file.zip> --fix     # rewrites it flat
+```
+
+It names the wrapper explicitly, flags the macOS artefacts, and `--fix` restores
+the original archive byte for byte. **And when you hand a bundle over, say in
+the same breath: upload the file as downloaded, do not expand it first.**
 
 **3. Ask the bundle for less than the draft on *every* field it declares.**
 Timeouts and resources alike: `14000` against a 14400 s draft, `600` against

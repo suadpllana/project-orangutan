@@ -118,6 +118,14 @@ def build(task_dir: Path, run_checks: bool) -> bool:
     # A fingerprint, so "which zip did you upload?" has an answer. Every send of
     # a bundle should quote it.
     print(f"      sha256:{digest}")
+    # This verification ends at the filesystem. What the inspector opens is
+    # whatever survives the download, and macOS auto-expands a .zip and puts the
+    # <slug>/ wrapper back the moment the folder is re-compressed -- which is
+    # the "required file missing" rejection, a second time. Say so here, and
+    # check the uploaded file with tools/verify_zip.py.
+    print("      upload this file AS IS - do not expand it first")
+    print(f"      verify the file you upload: python3 tools/verify_zip.py "
+          f"{target.relative_to(REPO)}")
     if size > 512 * 1024 * 1024:
         print("error: over the 512 MiB upload cap", file=sys.stderr)
         return False

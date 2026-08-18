@@ -25,8 +25,13 @@ docker build -t <slug> tasks/<slug>/bundle/environment/
       not join across newlines.
 - [ ] `tests/test.sh` and `solution/solve.sh` are executable in the ZIP.
 - [ ] The five required paths are at the **root of the ZIP**, with no `<slug>/`
-      wrapper. Check the archive you are about to upload, not the directory it
-      came from: `unzip -l dist/<slug>.zip | head`.
+      wrapper and no `__MACOSX/` tree. Check the archive **that is actually
+      being uploaded**, not the directory it came from and not the file you
+      wrote — macOS auto-expands downloads, and re-compressing the folder puts
+      the wrapper back: `python3 tools/verify_zip.py <the-file>.zip`
+      (`--fix` rewrites it flat).
+- [ ] When handing the ZIP over, said in the same message: upload it as
+      downloaded, do not expand it first.
 
 ## task.toml schema
 

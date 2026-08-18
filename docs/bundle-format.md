@@ -12,6 +12,23 @@ inspection with *"required file missing"*, because the inspector looks for
 `task.toml`. This cost one upload artifact; `tools/build_bundle.py` now asserts
 the five required paths exist at the root of the ZIP it just wrote.
 
+**It cost a second one for a reason `build_bundle.py` cannot see.** macOS
+auto-expands a downloaded `.zip`, so the thing left on disk is a folder;
+re-compressing that folder in Finder puts the wrapper straight back and adds a
+`__MACOSX/` tree and `.DS_Store` besides. The archive that was built correctly
+and the archive that was uploaded are then different files with the same name.
+Verify the one you are about to upload:
+
+```bash
+python3 tools/verify_zip.py dist/<slug>.zip          # audit any .zip
+python3 tools/verify_zip.py <downloaded>.zip --fix   # rewrite it flat in place
+```
+
+`--fix` drops the wrapper and the macOS artefacts and rebuilds the entries with
+the executable bits intact. On the rejected `pkgsolve` upload it reproduced the
+original archive's sha256 exactly, which is how we know the build was never at
+fault. **Upload the file as downloaded; do not expand it first.**
+
 ```
 my-task/                 <- your directory; zip its CONTENTS, not itself
 ├── task.toml            # [metadata], [verifier], [agent], [environment]
