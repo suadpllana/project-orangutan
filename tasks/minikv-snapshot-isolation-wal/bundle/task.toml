@@ -41,10 +41,19 @@ pass_threshold = 0.85
 [environment]
 dockerfile = "environment/Dockerfile"
 build_context = "environment"
-# Exactly the draft's resourceEstimate (2000 cpuMillis / 4096 MB / 8192 MB /
-# 0 GPUs), which is also what the approved reference bundle declares. The
-# timeouts above ask for less than the draft; these match it.
-cpus = 2
-memory_mb = 4096
-storage_mb = 8192
+# Strictly below the draft's resourceEstimate (2000 cpuMillis / 4096 MB /
+# 8192 MB), on the same principle as the timeouts above. Three uploads whose
+# resources exactly EQUALLED the draft were all rejected as a "resource
+# declaration mismatch" while every other field varied between them, so equality
+# is the one thing left that they had in common.
+#
+# `gpus` is the exception and must stay 0: it cannot be lower, so a rule that
+# demanded strictly-less everywhere would make every CPU-only task impossible.
+#
+# These are also honest figures. The heaviest graded workload is 20k keys of
+# ~112 bytes, peaking in the low tens of megabytes, and the reference grades the
+# whole suite in ~5s. Verified under `taskset -c 0`, i.e. on a single core.
+cpus = 1
+memory_mb = 2048
+storage_mb = 4096
 gpus = 0

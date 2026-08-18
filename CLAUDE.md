@@ -133,15 +133,23 @@ relative to the **archive root**; the guideline's `my-task/` diagram is the
 directory whose contents you zip. `build_bundle.py` now re-opens the ZIP and
 asserts the five paths before reporting success.
 
-**3. Ask the bundle for less than the draft on the timeouts; match it on the
-resources.** That is what the approved bundle does: `timeout_sec = 14000`
-against a 14400 s draft envelope and `600` against 1200, but `cpus = 2`,
-`memory_mb = 4096`, `storage_mb = 8192`, `gpus = 0` exactly equal to a
-default draft. Do not "improve" on this by lowering the resources — I tried it
-on a hunch and it is unsupported by any evidence; equality there is what an
-approved task ships. Verify against the numbers actually stored in the form
-(ask the submitter to read them back) rather than reasoning about which
-comparison the intake uses.
+**3. Ask the bundle for less than the draft on *every* field it declares.**
+Timeouts and resources alike: `14000` against a 14400 s draft, `600` against
+1200, `cpus = 1` against 2000 cpuMillis, `memory_mb = 2048` against 4096. The
+one exception is `gpus`, which stays equal at 0 because it cannot go lower — and
+that exception is also the proof that the rule cannot be strict everywhere.
+
+This one cost three uploads. Bundles whose resources exactly *equalled* the
+draft were rejected as "resource declaration mismatch" three times while every
+other field varied between attempts — `[environment] network_mode` present then
+absent, `dockerfile`/`build_context` absent then present, timeouts equal then
+below. Equality on the resources is the only thing all three had in common. An
+approved bundle ships `cpus = 2 / 4096 / 8192`, which looks like a
+counterexample, but you only ever see its *bundle*: its draft may well have
+declared a larger envelope, and reasoning from the half you can see is what sent
+me back and forth. **Declare what the task actually needs, measure to prove it
+(`taskset -c 0` for a one-core claim), and leave the draft as the envelope
+above it.**
 
 **4. The draft you submitted is not the draft in your repo.** Intake compares
 every number in `task.toml` against the draft the platform *stored*, which you

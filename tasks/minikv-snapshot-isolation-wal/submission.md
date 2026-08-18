@@ -193,7 +193,7 @@ sealed suite.
 
 ### Environment summary
 
-`2626 / 20000 chars`
+`2887 / 20000 chars`
 
 A single container, offline at runtime, no GPU.
 
@@ -226,9 +226,13 @@ A single container, offline at runtime, no GPU.
 * Storage layout: a database is a directory. The only filename the
   specification fixes is `wal.log`. `data.json`, written by the starting
   implementation, is explicitly not part of the contract.
-* Resources: 2 CPU cores, 4 GiB RAM, 8 GiB disk — comfortably inside the
-  sandbox's 8 CPU / 64 GiB / 40 GiB envelope. The heaviest graded workload is
-  20 000 keys of ~112 bytes, which peaks in the low tens of megabytes.
+* Resources: the draft's envelope is 2 CPU cores / 4 GiB RAM / 8 GiB disk;
+  `task.toml` asks for less than that — 1 core, 2 GiB, 4 GiB — because that is
+  what the task actually needs. The heaviest graded workload is 20 000 keys of
+  ~112 bytes, peaking in the low tens of megabytes, and the whole suite grades
+  in about five seconds. Verified pinned to a single core with `taskset -c 0`:
+  117/117, every performance budget met with well over an order of magnitude
+  of headroom.
 * Durability model: process failure (`SIGKILL`), not machine failure. Bytes
   handed to the kernel count as durable, so `flush()` is sufficient and no
   `fsync` is required. This is stated in the specification so the performance

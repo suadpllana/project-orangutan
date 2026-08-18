@@ -317,13 +317,14 @@ def check_cross(bundle: Path, config: dict | None, draft: dict, report: Report) 
         if not isinstance(bundle_value, (int, float)):
             continue
         default = FORM_DEFAULTS[draft_key]
-        # Timeouts should sit below the draft envelope, as the approved bundle
-        # does. Resources equal to the draft are correct - do not "fix" them.
-        if key == "timeout_sec" and bundle_value == default:
+        # Every declared field should sit below the draft envelope, not on it.
+        # `gpus` is exempt: 0 cannot go lower.
+        if key != "gpus" and bundle_value * scale == default:
             report.warn(
-                f"task.toml [{section}] timeout_sec={bundle_value} exactly "
-                f"equals the form default for {draft_key}; the approved bundle "
-                f"asks for less (14000 against 14400, 600 against 1200)."
+                f"task.toml [{section}] {key}={bundle_value} exactly equals the "
+                f"form default for {draft_key}. Ask for less. Three uploads whose "
+                f"resources equalled the draft were rejected as 'resource "
+                f"declaration mismatch' with everything else varying."
             )
         if bundle_value * scale > default:
             report.warn(
