@@ -1,0 +1,65 @@
+[metadata]
+name = "pkgsolve-resolver-explanations"
+title = "pkgsolve: a version resolver that has to justify its failures and pay for its questions"
+description = """
+Rebuild the solver core of a package manager. Three requirements have to hold at
+once and each rules out the cheap way of getting the others: the returned
+solution must be the one a fixed alphabetical, newest-first decision procedure
+names -- so the search cannot be reordered by the heuristic that makes
+backtracking fast; an unsolvable manifest must raise `Unsolvable` carrying a set
+of facts the grader re-checks for truth, sufficiency and minimality; and the
+whole call, explanation included, must stay inside a budget of registry
+questions that the grader counts through a client the submission cannot see.
+Correct answers are not enough, and neither is a fast search.
+"""
+tags = ["library-clone", "dependency-resolution", "search", "algorithms", "python"]
+collection_family = "library_clone"
+task_family = "feature_development"
+verifier_family = "programmatic"
+difficulty = "hard"
+expert_time_estimate_hours = 7
+version = "1.0.0"
+
+[agent]
+# The rollout is fully sealed: everything the task needs is baked into the image.
+network_mode = "none"
+# Deliberately below the draft's 14400s envelope; the bundle must never ask for
+# more than the draft declares.
+timeout_sec = 14000
+
+[verifier]
+entrypoint = "tests/test.sh"
+network_mode = "none"
+# Measured: 1.6s against the reference, 3.1s against the untouched starting
+# state, 4.4s against the slowest wrong submission tried. 900s is roughly 500x
+# headroom and sits below the draft's 1200s envelope; grade.py holds its own
+# 660s deadline inside it.
+timeout_sec = 900
+# Continuous, weighted score in [0, 1]; written to /logs/reward.txt and
+# /logs/reward.json. Exit status 0 means the score reached the threshold.
+reward_file = "/logs/reward.txt"
+pass_threshold = 0.92
+
+[environment]
+dockerfile = "environment/Dockerfile"
+build_context = "environment"
+# Strictly below the draft's resourceEstimate (2000 cpuMillis / 4096 MB /
+# 8192 MB), on the same principle as the timeouts above. Three uploads of the
+# other task in this repository whose resources exactly EQUALLED the draft were
+# all rejected as a "resource declaration mismatch" while every other field
+# varied between them, so equality is the one thing left that they had in
+# common.
+#
+# `gpus` is the exception and must stay 0: it cannot be lower, so a rule that
+# demanded strictly-less everywhere would make every CPU-only task impossible.
+#
+# These are also honest figures. The whole verifier run peaks at 29.6 MB
+# resident and writes nothing to disk, and the suite is pure integer and set
+# arithmetic on a few hundred package releases. `taskset` does not exist on the
+# authoring host (macOS), so the single-core claim was checked by running the
+# suite under sixteen busy loops on eight cores instead -- roughly a third of a
+# core -- where the reference still grades in 2.5s and still scores 1.0000.
+cpus = 1
+memory_mb = 2048
+storage_mb = 4096
+gpus = 0
