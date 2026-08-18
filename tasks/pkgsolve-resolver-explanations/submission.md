@@ -32,7 +32,7 @@ programmatic
 
 ### Objective
 
-`3341 / 20000 chars`
+`3352 / 20000 chars`
 
 `/app` holds `pkgsolve`, the dependency-resolution library behind an internal
 build farm. Its version model, range parser and registry client work. Its
@@ -89,7 +89,7 @@ grader tokenises the submitted source and scores zero if it finds any of it.
 
 ### Motivation
 
-`1104 / 10000 chars`
+`1106 / 10000 chars`
 
 Every package manager has this component and every one of them got it wrong
 before it got it right. npm shipped years of non-deterministic installs; pip's
@@ -113,7 +113,7 @@ grading host as on an idle one.
 
 ### Difficulty explanation
 
-`3761 / 20000 chars`
+`3774 / 20000 chars`
 
 The difficulty is not in any one of the three laws. It is that the obvious way
 to satisfy each of them breaks another, and the loop closes.
@@ -180,7 +180,7 @@ interaction, not on the scaffolding — hence 7 hours rather than 20.
 
 ### Environment summary
 
-`2289 / 20000 chars`
+`2295 / 20000 chars`
 
 Base image `python:3.11-slim`, plus `git` and `ca-certificates` from apt and
 `pytest==8.3.3` from pip — all baked in at build time. The rollout has no
@@ -225,7 +225,7 @@ and an idle one.
 
 ### Oracle strategy
 
-`2536 / 20000 chars`
+`2543 / 20000 chars`
 
 `solution/solve.sh` copies `solution/reference/pkgsolve/*.py` over `/app/
 pkgsolve/` and then runs a smoke test that fails loudly if the drop-in is
@@ -270,7 +270,7 @@ Measured through the real `tests/test.sh` entrypoint: **1.0000, PASS, 1.6 s**,
 
 ### Verification strategy
 
-`3881 / 20000 chars`
+`3902 / 20000 chars`
 
 **Visible half** — `environment/public_tests/test_public.py`, 22 tests baked
 into the image, describing only behaviour that already exists: `Version` and
@@ -342,7 +342,7 @@ verifier timeout inside the draft's 1200 s.
 
 ### Binary success condition
 
-`450 / 10000 chars`
+`451 / 10000 chars`
 
 `tests/test.sh` exits 0, which happens exactly when the weighted score written
 to `/logs/reward.txt` reaches `[verifier] pass_threshold` = **0.92** and no
@@ -353,7 +353,7 @@ every registry-call budget, and does not break the visible suite.
 
 ### Partial score strategy
 
-`2149 / 10000 chars`
+`2163 / 10000 chars`
 
 Continuous and monotone. Each category contributes `weight x (tests passed /
 tests collected)`; a category that times out or fails to collect contributes
@@ -394,7 +394,7 @@ which the brute-force enumerator cannot afford.
 
 ### Anticipated exploits
 
-`4568 / 20000 chars`
+`4582 / 20000 chars`
 
 Ordered by how much of the defence is structural rather than a test somebody
 remembered to write.

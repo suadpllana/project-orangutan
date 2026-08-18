@@ -32,7 +32,7 @@ SKIP_DIRS = {"__pycache__", ".pytest_cache", ".git"}
 SKIP_SUFFIXES = {".pyc", ".pyo"}
 # Reward artefacts a local grader run leaves behind. Shipping one would put a
 # stale score inside the archive.
-SKIP_NAMES = {"reward.txt", "score.txt", "score.json", "junit.xml"}
+SKIP_NAMES = {"reward.txt", "reward.json", "score.txt", "score.json", "junit.xml"}
 EXECUTABLE = {"tests/test.sh", "solution/solve.sh"}
 
 # The exact set the inspection stage looks for, at the archive root.
@@ -84,10 +84,14 @@ def build(task_dir: Path, run_checks: bool) -> bool:
             # *contents* are zipped, not a level inside the archive - reading it
             # the other way got a bundle rejected for "required file missing"
             # with all five files present one directory too deep.
-            info = zipfile.ZipInfo(str(relative))
+            # POSIX separators throughout: on Windows `str(relative)` is
+            # `tests\test.sh`, which silently missed the EXECUTABLE set and
+            # shipped both entrypoints without their executable bit.
+            name = relative.as_posix()
+            info = zipfile.ZipInfo(name)
             info.compress_type = zipfile.ZIP_DEFLATED
             mode = stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH
-            if str(relative) in EXECUTABLE or path.stat().st_mode & stat.S_IXUSR:
+            if name in EXECUTABLE or path.stat().st_mode & stat.S_IXUSR:
                 mode |= stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
             info.external_attr = (stat.S_IFREG | mode) << 16
             archive.writestr(info, path.read_bytes())

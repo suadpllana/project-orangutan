@@ -32,7 +32,7 @@ programmatic
 
 ### Objective
 
-`4612 / 20000 chars`
+`4628 / 20000 chars`
 
 `/app` holds `minikv`, a small embedded key/value store written in pure
 Python. It works, but it is naive: every `put` rewrites the entire database
@@ -106,7 +106,7 @@ process tree, the call stack or test-runner state.
 
 ### Motivation
 
-`1158 / 10000 chars`
+`1164 / 10000 chars`
 
 Storage engines are where "looks correct" and "is correct" diverge the most.
 Snapshot isolation, write-ahead logging and crash recovery are the three ideas
@@ -130,7 +130,7 @@ invariants interact, which is the capability worth measuring.
 
 ### Difficulty explanation
 
-`3605 / 20000 chars`
+`3613 / 20000 chars`
 
 The individual techniques are textbook; the difficulty is that they constrain
 each other, and only a design that satisfies all of them at once survives the
@@ -193,7 +193,7 @@ sealed suite.
 
 ### Environment summary
 
-`2887 / 20000 chars`
+`2899 / 20000 chars`
 
 A single container, offline at runtime, no GPU.
 
@@ -244,7 +244,7 @@ A single container, offline at runtime, no GPU.
 
 ### Oracle strategy
 
-`2873 / 20000 chars`
+`2887 / 20000 chars`
 
 `solution/solve.sh` copies the reference package over `/app/minikv` and then
 imports it, opens a store, runs a transaction and a checkpoint, so a broken
@@ -293,7 +293,7 @@ reading paths; transactions hold nothing between calls.
 
 ### Verification strategy
 
-`5741 / 20000 chars`
+`5773 / 20000 chars`
 
 **Visible half.** `/app/tests/test_basic.py` ships in the image: 13 tests over
 get/put/delete/scan, reopen, validation and idempotent close. It tells the
@@ -386,7 +386,7 @@ cost — so a partial or lucky implementation cannot pass:
 
 ### Binary success condition
 
-`951 / 10000 chars`
+`955 / 10000 chars`
 
 The weighted score written to `/logs/reward.txt` must reach the
 **0.85 pass threshold** declared in `task.toml`, and the integrity scan must
@@ -406,7 +406,7 @@ The report additionally records `binary_pass`, true only when every one of the
 
 ### Partial score strategy
 
-`2830 / 10000 chars`
+`2834 / 10000 chars`
 
 Partial credit is the weighted mean of each scored category's pass ratio, so
 the reward is continuous and monotone in how much of the specification is
@@ -463,7 +463,7 @@ after the fact.
 
 ### Anticipated exploits
 
-`5650 / 20000 chars`
+`5660 / 20000 chars`
 
 * **Detecting the grader.** Reading `PYTEST_CURRENT_TEST`, `sys.argv`,
   `sys.modules`, `os.environ`, or walking the call stack to special-case

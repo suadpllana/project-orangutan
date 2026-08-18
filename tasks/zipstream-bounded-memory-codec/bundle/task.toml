@@ -1,0 +1,72 @@
+[metadata]
+name = "zipstream-bounded-memory-codec"
+title = "zipstream: make a telemetry codec stream, in a fifth of the memory a frame needs"
+description = """
+`/app` ships a working lossless codec for fleet telemetry: it reads the whole
+stream, builds one order-0 Huffman table, writes the 256-byte table into the
+frame, and emits the payload. Replace it with one that streams. Three
+requirements hold at once and each rules out the cheap way of getting the
+others: the source is one-pass, non-seekable and of unknown length and the sink
+cannot be rewound, so there is no second pass to build a global table with; the
+traced working set must stay under 384 KiB against 512 KiB streams, so the
+stream cannot be buffered to fake one; and the frame must reach a per-profile
+size target measured against the shipping codec on the same bytes, so neither
+correctness nor frugality alone is enough. Ceilings are graded as hard as
+targets -- incompressible input must not expand, six-bit base64 must not
+regress, and a stream of one repeated byte must beat Huffman's one-bit-per-
+symbol floor. Nothing in the grade is a wall-clock measurement.
+"""
+tags = ["algorithmic-optimization", "compression", "streaming", "memory", "python"]
+collection_family = "algorithmic_optimization"
+task_family = "performance"
+verifier_family = "optimization"
+difficulty = "hard"
+expert_time_estimate_hours = 7
+version = "1.0.0"
+
+[agent]
+# The rollout is fully sealed: everything the task needs is baked into the image.
+network_mode = "none"
+# Deliberately below the draft's 14400s envelope; the bundle must never ask for
+# more than the draft declares.
+timeout_sec = 14000
+
+[verifier]
+entrypoint = "tests/test.sh"
+network_mode = "none"
+# Measured: 87s of child time against the reference, 8s against the untouched
+# starting state (which fails fast), 105s against the slowest wrong submission
+# tried. 1000s is roughly 11x headroom over the reference and sits below the
+# draft's 1200s envelope; grade.py holds its own 780s deadline inside it, and
+# each individual codec call is capped at 120s so a hang costs one measurement.
+timeout_sec = 1000
+# Continuous, weighted score in [0, 1]; written to /logs/reward.txt and
+# /logs/reward.json, plus every other plausible location. Exit status 0 means
+# the score reached the threshold.
+reward_file = "/logs/reward.txt"
+pass_threshold = 0.88
+
+[environment]
+dockerfile = "environment/Dockerfile"
+build_context = "environment"
+# Strictly below the draft's resourceEstimate (2000 cpuMillis / 4096 MB /
+# 8192 MB), on the same principle as the timeouts above. Three uploads of
+# another task in this repository whose resources exactly EQUALLED the draft
+# were all rejected as a "resource declaration mismatch" while every other
+# field varied between them, so equality is the one thing left that they had in
+# common.
+#
+# `gpus` is the exception and must stay 0: it cannot be lower, so a rule that
+# demanded strictly-less everywhere would make every CPU-only task impossible.
+#
+# These are also honest figures. The grader runs one child at a time and never
+# threads, so it is a single-core workload by construction; the largest thing
+# it holds is a 896 KiB stream on disk and a few hundred KiB in the child, and
+# the whole scratch tree is under 30 MB. `taskset` does not exist on the
+# authoring host (Windows), so the single-core claim was checked by running the
+# full suite under 32 competing busy loops on 16 cores -- roughly a third of a
+# core -- where the reference still scores 1.0000.
+cpus = 1
+memory_mb = 2048
+storage_mb = 4096
+gpus = 0

@@ -1,0 +1,503 @@
+# Orangutan draft. Field names and bounds mirror the authoring guideline; see
+# docs/draft-fields.md. The bundle that pairs with this draft is in bundle/.
+#
+#   python3 tools/validate_draft.py --all      # bounds, enums, cross-checks
+#   python3 tools/check_bundle.py --all        # structure + quality-check stages
+#   python3 tools/render_submission.py --all   # regenerate submission.md
+#
+# Every number below was measured, not estimated.
+
+schema_version: 2
+
+# ----------------------------------------------------------------- identity
+title: "zipstream: make a telemetry codec stream, in a fifth of the memory a frame needs"
+workingSlug: zipstream-bounded-memory-codec
+collectionFamily: "Algorithmic optimization"
+taskFamily: performance
+verifierFamily: optimization
+
+# --------------------------------------------------------------- what it is
+objective: |
+  `/app` holds `zipstream`, the lossless codec a fleet telemetry agent uses to
+  ship log and metric streams to a collector. It works — every stream it writes
+  reads back byte for byte and the visible suite passes — and it is the wrong
+  shape for the device it runs on. It reads the whole stream into memory before
+  it can emit a byte, because it builds one order-0 Huffman table from
+  statistics of the entire payload; it writes that 256-byte table into the head
+  of every frame, so a 200-byte record costs 372 bytes to send; and it models
+  nothing beyond how often each byte value occurs.
+
+  Replace it with a codec that streams. Same package, same public API, same
+  guarantees. Four requirements hold at once, and each of them rules out the
+  cheap way of getting the others.
+
+  1. **The stream protocol (§2).** `source` has exactly one method, `read(n)`
+     with `n > 0`. There is no `read()`, no `seek`, no `tell`, no length: the
+     size of the stream is not knowable until it ends, and a short read does
+     not mean end of stream. `sink` has exactly one method, `write(b)` — you
+     cannot rewind to patch a header you already wrote. So there is no second
+     pass, and no way to emit a table computed from a payload the far end has
+     not seen yet. On top of that, the frame must be a function of the input
+     bytes alone: the same payload delivered in different chunk sizes must
+     produce a byte-identical frame, and at least 25% of the frame must already
+     have been written by the time the source first returns `b""`.
+
+  2. **The memory budget (§4).** Each call runs in a fresh interpreter with
+     `tracemalloc` started before the package is imported. The traced bytes
+     alive when the entry point is called must stay under 384 KiB, and the peak
+     during the call, above that baseline, must also stay under 384 KiB. Graded
+     streams are 512 KiB and 896 KiB, so neither buffering the stream during
+     the call nor pre-allocating a buffer at import time fits. The working set
+     must also be independent of stream length: the figure on the 896 KiB
+     stream may exceed the one on the 512 KiB stream by at most 32 KiB.
+
+  3. **The compression targets (§5).** Five 512 KiB profiles — logfmt lines,
+     CSV metric rows, JSON lines, a binary record format of varints and IEEE
+     doubles, and a five-segment mixture — each carry a target expressed as a
+     fraction of what the shipping v1 codec produces on the same bytes, which
+     the grader computes itself: 0.52, 0.56, 0.50, 0.92 and 0.65. Missing a
+     target earns credit interpolated from the shipping codec's own size, so
+     progress always counts.
+
+  4. **The ceilings (§6).** Graded as hard as the targets, because the cheap
+     way to hit a ratio is a model that collapses everywhere else.
+     Incompressible input must expand by no more than `n/64 + 64` bytes;
+     base64 payload lines, which carry six bits in every eight-bit byte, must
+     not exceed 1.04× the shipping codec; 512 KiB of one repeated byte must
+     compress to under `n/100`, which is eight times below the one-bit-per-
+     symbol floor a pure Huffman coder cannot cross; and a stream cycling
+     through all 256 byte values must reach `n/10`. §7 adds the complement:
+     compressing two differently-shaped halves as one stream must cost no more
+     than 1.05× compressing them apart, so a model that stops learning fails.
+
+  Done means: `tests/test.sh` exits 0. Standard library only; `zlib`, `gzip`,
+  `bz2`, `lzma` and every equivalent are unimportable in the grading process,
+  along with `ctypes`, `subprocess`, `socket` and `tracemalloc`. Every file you
+  add lives inside `/app/zipstream/`, and the package is at most 96 KiB of
+  Python. Nothing in the grade is a wall-clock measurement.
+
+motivation: |
+  Every fleet agent that ships logs or metrics off a device hits this exact
+  wall, and hits it in this exact order. Version one compresses a buffer,
+  because a buffer is what the API gives you. Then the streams get longer than
+  the device's spare memory, the collector starts counting egress bytes, and
+  somebody notices that most of what is being sent is the same twenty field
+  names over and over. The rewrite that follows is not "add compression" — the
+  compression is already there — it is the considerably harder job of keeping
+  the ratio while giving up the two things that made it easy: seeing the whole
+  payload, and having somewhere to put it.
+
+  That is the shape of a real optimisation task and it is why the constraints
+  here are not independent. Backward-adaptive modelling, where both ends
+  rebuild the same tables from data they have already processed, exists
+  precisely because you cannot transmit a table you computed from bytes the
+  decoder has not received yet. Deflate's stored-block escape exists because an
+  entropy coder inflates random data. Bounded windows exist because the device
+  has 256 KiB, not 32 MB. An engineer who has built one of these recognises
+  every requirement in the specification; an engineer who has not will discover
+  them in the order the grader reports them.
+
+# ------------------------------------------------------------------ effort
+difficultyExplanation: |
+  The difficulty is not that any one requirement is hard. It is that the
+  obvious way to satisfy each one is ruled out by another, so a submission has
+  to be designed rather than assembled, and the design has to be chosen before
+  much of the code is written.
+
+  **The trap that costs the most is the two-pass reflex.** Every textbook
+  Huffman coder counts symbols, builds a table, writes the table, then writes
+  the payload. That is what `/app` does. The natural fix — read in blocks and
+  emit a table per block — is *worse* on small frames and still needs a
+  seekable sink for the header on large ones. The way out is backward-adaptive
+  coding: both ends derive identical tables from statistics of data they have
+  already handled, so no table is ever transmitted. That idea is not hinted at
+  anywhere in the specification, and a submission that does not find it cannot
+  simultaneously reach the ratio targets and the framing bound.
+
+  **The second trap is that the constraints are only jointly satisfiable in a
+  narrow band.** LZ77 with a large window gets the text profiles easily and
+  fails the memory budget; an order-1 byte model with 256 contexts is 128 KiB
+  of counters before any code tables exist, and materialising 256 canonical
+  code tables in Python is megabytes. Something has to give, and working out
+  *what* — a smaller window, hashed or bucketed contexts, fixed-size arrays
+  instead of dicts, tables rewritten in place instead of rebuilt — is the
+  engineering. The reference solution rebuilds its five code tables in place
+  on every block specifically because allocating new ones keeps two full sets
+  alive at hand-over, and on this budget that alone is most of the allowance.
+
+  **The third trap is that ratio and ceiling pull in opposite directions.**
+  A pure LZ codec expands base64 and fails §6. An entropy coder with no escape
+  inflates random data and fails the expansion bound. A pure Huffman coder
+  cannot spend under one bit per symbol, so the repeated-byte ceiling
+  (`n/100`, eight times below that floor) is unreachable without matches, run
+  coding, or arithmetic coding. Each of those is a *different* mechanism, and
+  the ceilings are chosen so no single one covers all of them.
+
+  **The fourth is subtle and will be discovered by failing.** Short reads.
+  `while chunk := source.read(N)` looks correct and is not: the graded source
+  returns fewer bytes than asked for on part of its schedule, so a codec that
+  blocks on read boundaries produces a different frame under a different read
+  schedule, and §2.3 compares the two frames byte for byte. The same class of
+  bug hides at the other end: zero padding invented past the end of a
+  truncated frame is indistinguishable from a real end-of-frame tag unless the
+  reader tracks which bits were real. The reference had exactly that bug, and
+  the suite caught it.
+
+  It is achievable, and the shape of the answer is standard. A competent
+  engineer who has written an entropy coder before will recognise the target
+  as roughly deflate-class and get there: the reference is LZ77 over an 8 KiB
+  window plus a backward-adaptive contextual Huffman model, 29 KiB of
+  Python, and it clears every target with 20–25% margin on the text profiles.
+  The work is in the joint design, the memory accounting, and the two or three
+  bugs that only appear at a block boundary — which is why seven hours is
+  honest and why a frontier model is unlikely to one-shot it.
+
+expertTimeEstimateHours: 7
+
+# ------------------------------------------------------- environment & resources
+environmentSummary: |
+  `python:3.11-slim` with `pytest==8.3.3` installed at build time and nothing
+  else; the implementation itself must be pure standard library. The rollout is
+  fully offline — `[agent] network_mode = "none"` — and everything the task
+  needs is baked into the image.
+
+  `/app` contains the working v1 codec (`zipstream/` — `__init__.py`,
+  `codec.py`, `huffman.py`, `bitio.py`, `errors.py`, about 9 KiB of Python),
+  the visible suite (`public_tests/test_public.py`, 23 tests, all passing on
+  the seed), `SPEC.md`, `README.md` with a worked example of measuring your own
+  working set, and `samples/` — five frozen sample streams, one per data
+  profile, 220 KiB in total, so a submission can measure ratios locally. The
+  image build runs the visible suite and a self-check that asserts both halves
+  of the starting state: that the seed round-trips everything, and that it is
+  still over the memory budget and still over the small-frame bound. `/app` is
+  left as one clean git commit. `tests/`, `solution/`, the Dockerfile and
+  `task.toml` are removed from the image after the copy.
+
+  Resources: `cpus = 1`, `memory_mb = 2048`, `storage_mb = 4096`, `gpus = 0`,
+  all strictly below the draft envelope except `gpus`, which cannot go lower.
+  The verifier is a single-core workload by construction — it runs one child
+  process at a time and never threads — and its scratch tree peaks under 30 MB.
+
+  **The failure model, and what the budgets assume.** Nothing in the grade is a
+  wall-clock measurement. Every graded quantity is a byte count on disk or a
+  `tracemalloc` figure, both of which are exactly reproducible for a given
+  submission and seed, so a score does not move with the load on the grading
+  host. The only wall-clock numbers anywhere are the safety limits — 120 s per
+  codec call and a 780 s deadline for the whole run — and they exist so a hang
+  costs one measurement rather than the report. The reference averages 1.8 s
+  per call. Memory is measured with `tracemalloc`, which counts Python-level
+  allocations including transients, and is started before the submission is
+  imported so a table built at module level is charged rather than forgiven.
+
+resourceEstimate:
+  cpuMillis: 2000               # form default; task.toml asks for 1000
+  memoryMb: 4096                # form default; task.toml asks for 2048
+  storageMb: 8192               # form default; task.toml asks for 4096
+  gpuCount: 0                   # equal is fine here, and only here
+  agentTimeoutSec: 14400        # form default; task.toml asks for 14000
+  verifierTimeoutSec: 1200      # form default; task.toml asks for 1000
+
+networkRequirements:
+  mode: none
+  hosts: []
+  justification: |
+    The task is fully offline. The codec must be pure standard library, the
+    graded streams are synthesised inside the verifier from the run seed, and
+    the only third-party package in the image is pytest, installed at build
+    time. Nothing is fetched at runtime, by the agent or by the verifier —
+    which is also what makes the grade reproducible.
+
+# ----------------------------------------------------- oracle & verification
+oracleStrategy: |
+  `solution/reference/zipstream/` is a complete v2 codec, 29 KiB of pure
+  standard-library Python in eight modules, and `solution/solve.sh` copies it
+  over `/app/zipstream` and then smoke-tests it before the verifier ever runs.
+
+  It is LZ77 over a bounded window, entropy-coded with a backward-adaptive
+  contextual Huffman model:
+
+  * **The frame** is a sequence of byte-aligned blocks: a two-byte `ZS` magic,
+    then per block a tag byte (end / compressed / stored) and a two-byte
+    payload length, then either a bit-packed symbol stream padded to a byte
+    boundary or the raw bytes. Three bytes of overhead per 8 KiB block, and
+    three bytes for an empty stream.
+  * **No code table is ever written down.** Both ends rebuild the same five
+    tables at the same points in the symbol stream, from the statistics of the
+    blocks they have already handled. Two rules keep them in lockstep: counts
+    are rescaled only at block boundaries, never mid-block, so it does not
+    matter that the encoder applies a block's counts in one go while the
+    decoder applies them one symbol at a time; and a stored block still
+    updates the literal statistics from its raw bytes, which both ends can see.
+  * **The model** is one alphabet of 256 literals plus 29 length codes, split
+    across four contexts selected by the top two bits of the previous byte,
+    plus a 26-symbol distance alphabet. Four contexts capture most of the
+    first-order structure in telemetry without dividing the statistics too
+    finely to converge — and without the 256 sparse tables that would not fit
+    the budget.
+  * **The matcher** is a 8 KiB window with a 8192-entry hash head and an
+    8192-entry chain, all `array("i")` allocated once. The window size is the
+    knob that trades ratio against the budget: 8 KiB costs about one percent
+    against 32 KiB on telemetry and leaves room for the model.
+  * **Stored blocks** handle incompressible input: a block whose coded form is
+    no smaller than its input is emitted raw, so random data costs three bytes
+    per 8 KiB rather than the 6% an entropy coder would add.
+
+  Measured through the real `tests/test.sh` entrypoint at seed 20260818:
+  **1.0000, PASS**, every one of the 38 checks in all nine categories, 48 codec
+  calls in 87 s of child time. Working set 238,732 B compressing and 155,864 B
+  decompressing against a 393,216 B budget, import footprint 142,940 B, and the
+  working set moves by 144 B between a 512 KiB stream and an 896 KiB one.
+  Ratios 0.2466 (logfmt), 0.2535 (csv), 0.2120 (jsonl), 0.7928 (binlog), 0.4776
+  (mixed); as fractions of the shipping codec that is 0.377, 0.424, 0.346,
+  0.866 and 0.577 against targets of 0.52, 0.56, 0.50, 0.92 and 0.65 — 20–25%
+  inside on the text profiles, 6% on binlog, 11% on mixed, and stable to under
+  1% across 14 seeds.
+
+verificationStrategy: |
+  **The visible half** is `/app/public_tests/test_public.py` — 23 tests that
+  pass on the untouched seed and describe only what must not regress: the API
+  exists, the exception hierarchy holds, everything round-trips including
+  empty and binary payloads, short reads do not truncate, frames start with
+  `ZS`, and damaged input raises `CorruptStream`. Not one of them looks at
+  memory, ratio, or streaming. The instructions say so in as many words. The
+  grader re-runs its **own pristine copy**, so editing the local one changes
+  nothing.
+
+  **The hidden half** is all of `tests/`: the grader, the stream harness, the
+  corpus generator and the sealed baseline. 38 checks across nine categories,
+  every graded stream synthesised at grading time from the run seed.
+
+  | category | weight | checks | what it grades |
+  | --- | --- | --- | --- |
+  | contract | 0.13 | 5 | short reads, chunk-invariance, output before EOF, no forbidden attribute access |
+  | roundtrip | 0.19 | 10 | exact recovery of six profiles plus random, repeated, cycling and a nine-segment heterogeneous stream |
+  | memory | 0.13 | 4 | working set both directions, import footprint, and independence from stream length |
+  | framing | 0.09 | 3 | seven small frames in aggregate, and two small compressible payloads |
+  | ratio | 0.26 | 5 | the metric, continuous, against the sealed baseline on the same bytes |
+  | ceiling | 0.09 | 4 | expansion, six-bit payloads, one repeated byte, a byte cycle |
+  | adaptivity | 0.06 | 2 | joined vs separate, in both orders |
+  | robustness | 0.05 | 4 | its own frames truncated at 30%, 60%, 95% and one byte short |
+  | regression | 0.00 | 1 | the visible suite; its pass ratio multiplies the score |
+
+  Four structural decisions do most of the work, and each is a property of the
+  harness rather than a test somebody remembered to write.
+
+  * **Compression and decompression never share a process.** Nothing but the
+    frame on disk crosses between them, which makes "stash the payload in a
+    global and return a receipt" impossible rather than forbidden. Verified: a
+    submission that does exactly that scores 0.
+  * **The source and the sink have one method each.** `seek`, `tell`,
+    `getvalue`, `__len__` and everything else raise, and the attempt is
+    recorded. `read()` with no size raises too. The length of the stream is
+    genuinely unavailable, so a two-pass design cannot be written, not merely
+    cannot be justified.
+  * **Only `zipstream/**.py` is copied into a tree the grader owns**, and the
+    run happens there — which kills `conftest.py`, `sitecustomize.py`,
+    `pytest.ini` and edits to the visible suite in one move. The collected
+    source is then tokenised, so a docstring that says "unlike zlib, this
+    models the data itself" is clean while `import zlib` is not. Both
+    directions verified.
+  * **The memory budget is a precondition for every other measurement.** A
+    call that exceeds it yields no usable result, so the checks that depend on
+    it score zero — including round-trip. That is deliberate and it is stated
+    in the instructions: the code in `/app` already round-trips correctly, and
+    crediting correctness would be crediting the starting workspace.
+
+  Targets are self-calibrating. Every ratio bound is a fraction of what the
+  **shipping v1 codec** produces on the same generated stream, computed by the
+  grader from the byte histogram and the same Huffman construction. An absolute
+  ratio would drift with the seed; measuring both codecs on the same bytes
+  cancels the drift — the reference's fraction moves by under 1% across two
+  dozen seeds on every profile.
+
+binarySuccessCondition: |
+  `tests/test.sh` exits 0, which happens exactly when the weighted score
+  written to `/logs/reward.txt` reaches `[verifier] pass_threshold` = **0.88**
+  and no integrity violation was found. Equivalently: the codec round-trips
+  every graded stream exactly while holding both memory budgets, produces a
+  byte-identical frame however the source chunks its reads, meets the five
+  compression targets and the four ceilings, keeps adapting across a change of
+  profile, reports truncated frames as `CorruptStream`, and does not break the
+  visible suite.
+
+partialScoreStrategy: |
+  Continuous and monotone. Eight scored categories with the weights in the
+  table above, summing to 1.00; the ninth, `regression`, has weight zero and
+  its pass ratio **multiplies** the total, so keeping the visible suite green
+  earns nothing and breaking it costs proportionally rather than off a cliff.
+  A category's score is its earned points over its possible points, and a
+  category whose measurements could not run contributes zero to the numerator
+  and its full weight to the denominator — an unrunnable check is never a free
+  pass.
+
+  The `ratio` category is the continuous one. Each of the five streams scores
+  `(baseline - achieved) / (baseline - target)`, clamped to `[0, 1]`, where
+  `baseline` is the shipping codec's output on the same bytes. Reaching the
+  target is full marks; matching the shipping codec is zero; anything between
+  is credited in proportion. An integrity violation — a forbidden name in the
+  source, or a package over 96 KiB — zeroes the whole score regardless of
+  behaviour.
+
+  Measured landing points, all through the real entrypoint:
+
+  | submission | score | why |
+  | --- | --- | --- |
+  | the reference | **1.0000** | — |
+  | streams correctly, models nothing (LZ disabled, four-context Huffman) | **0.7332** | ratio 42.6%, framing 33%, ceiling 50% |
+  | keeps the payload in a module global | **0.0000** | decompression is a different process |
+  | writes the payload to a side file | **0.0000** | the audit hook denies the write |
+  | the untouched starting workspace | **0.0000** | every category |
+
+  The wrong-but-plausible variant is the one worth reading: it satisfies the
+  stream protocol, the memory budget, adaptivity and robustness in full, and
+  still fails, because doing the streaming work without doing the modelling
+  work leaves it 0.15 below the threshold. That is the gap the task is about.
+
+anticipatedExploits: |
+  **Keep the payload and hand back a receipt.** The oldest trick in compression
+  benchmarking: `compress` stores the bytes in a module global, a class
+  attribute or a file, and `decompress` reads them back. *Countermeasure:*
+  structural. Compression and decompression run in **different processes** and
+  the only thing that crosses is the frame on disk, so a global does not
+  survive. An audit hook denies every filesystem write, socket and subprocess
+  for the duration of a call, and the child's working directory is checked for
+  new files afterwards. Both variants were built and graded: **0.0000**.
+
+  **Call a compression library.** `zlib.compress` is a one-line win over every
+  ratio target. *Countermeasure:* two layers. At runtime a meta-path finder
+  makes `zlib`, `gzip`, `bz2`, `lzma`, `zipfile`, `tarfile`, `brotli`,
+  `zstandard`, `lz4`, `snappy`, `ctypes`, `subprocess`, `multiprocessing`,
+  `socket` and `tracemalloc` unimportable *before* the submission is imported,
+  and they are removed from `sys.modules` first so a cached entry does not slip
+  through. Verified against the direct import, the `importlib` route and
+  `codecs.encode(data, "zlib_codec")` — the last one names no forbidden module
+  at all, and is blocked because the codec registry has to import `zlib` to
+  serve it. Statically, the tokenised scan rejects the names outright.
+
+  **Turn off the instrument.** `tracemalloc.stop()` inside the codec would make
+  any working set reportable. *Countermeasure:* `tracemalloc` is on the blocked
+  list and in the scan, and the child re-checks `tracemalloc.is_tracing()`
+  after every call and records a violation if it is not.
+
+  **Slurp anyway, quietly.** Read the whole stream but allocate the buffer at
+  import time so the working set looks flat. *Countermeasure:* the import
+  footprint is measured and bounded at 384 KiB, and graded streams are 512 KiB
+  and 896 KiB, so no buffer that could hold one fits under either figure. The
+  working set is also required to be independent of stream length, which a
+  partial buffering strategy cannot fake.
+
+  **Buffer the output instead of the input.** Compress into memory and write
+  the frame in one call at the end, dodging the non-seekable sink.
+  *Countermeasure:* the sink records how much output existed at the moment the
+  source first returned `b""`; at least 25% must be there. The working-set
+  bound catches the large cases and this catches the rest — including the
+  version that writes a header up front to look incremental, because the
+  measurement is of bytes delivered, not of the first call.
+
+  **Overfit the visible corpus.** `/app/samples/` ships five real streams; a
+  frequency table or dictionary trained on them, baked into the source, is a
+  legitimate technique and a tempting shortcut. *Countermeasure:* graded
+  streams are generated at grading time with a **fresh vocabulary** — host
+  names, service names, field names, message words, series identifiers and
+  record field order all drawn per run — so a table fitted to the samples
+  transfers much less well than it appears to. The 96 KiB source cap bounds how
+  much dictionary can be shipped, and any dictionary loaded into memory
+  competes with the model for the same 384 KiB. A modest win from a baked-in
+  skeleton is real, and left legitimate: it is what a zstd dictionary is, and
+  it does not substitute for adaptive modelling.
+
+  **Overfit the visible tests.** *Countermeasure:* the visible suite describes
+  only what must not regress, is scored at weight zero, and the grader runs its
+  own pristine copy from `tests/public_reference/`, so a local edit changes
+  nothing. The instructions say the visible tests are the floor, not the target.
+
+  **Interfere with the runner.** `conftest.py` that patches assertions,
+  `sitecustomize.py` that runs at interpreter start, `pytest.ini` that
+  deselects, an edited visible suite. *Countermeasure:* structural — only
+  `zipstream/**.py` is collected into a tree the grader owns and the runs
+  happen there, so none of those files exists at grading time; a `conftest.py`
+  *inside* the package is dropped by name.
+
+  **Detect the grader and behave differently.** `PYTEST_CURRENT_TEST`,
+  `sys.argv`, `sys.modules`, `os.environ`, `inspect.stack`, `sys._getframe`.
+  *Countermeasure:* the tokenised scan looks at `NAME` tokens and at string
+  literals, so it sees `sys.modules` and the `PYTEST_CURRENT_TEST` literal but
+  not a docstring that mentions them; an integrity finding zeroes the score.
+  The spec forbids all of it in §10, so a legitimate submission is never
+  surprised by the defence.
+
+  **Win the metric and lose the point.** Reach the ratio targets with a model
+  that inflates random data, expands base64, or cannot beat one bit per symbol
+  on a constant stream. *Countermeasure:* the four ceilings in §6, each aimed
+  at a different mechanism, plus the adaptivity check in §7 — and the ceilings
+  are worth 0.15 between them, so they cannot be traded away for ratio.
+
+  **Pass by not finishing.** An infinite loop or a hang produces no report.
+  *Countermeasure:* each codec call is capped at 120 s in its own subprocess
+  and the whole run holds a 780 s deadline; a call that times out or is never
+  reached scores zero for every check that depends on it, and the report still
+  prints. The reference averages 1.8 s per call.
+
+  **Leave a reward file behind.** The agent can write to `/logs`; a
+  `reward.txt` containing `1.0` left there before the verifier runs would be
+  indistinguishable from a perfect score. *Countermeasure:* the grader deletes
+  every stale reward artefact from every candidate directory before it does
+  anything else, then publishes a 0.0 floor, then the real score.
+
+# ------------------------------------------------------------------- notes
+notes: |
+  Measured on the authoring host (Windows 11, Python 3.14.3, 16 cores), through
+  the real `tests/test.sh` entrypoint unless stated.
+
+  * oracle 1.0000 PASS, 48 codec calls, 87 s child time; nop 0.0000 FAIL, 8 s;
+    LZ-disabled variant 0.7332 FAIL; global-stash cheat, file-stash cheat and a
+    syntax-error submission all 0.0000, each with a reward file written.
+  * Reference: 29,088 bytes of Python in 8 modules, against a 98,304 cap.
+    Working set 238,732 B compress / 155,864 B decompress against a 393,216 B
+    budget; import footprint 142,940 B; working-set drift between a 512 KiB and
+    an 896 KiB stream, 144 B against an allowed 32,768.
+  * Ratio stability across 14 seeds at 512 KiB, as a fraction of the sealed
+    baseline: logfmt 0.384–0.405, csv 0.410–0.448, jsonl 0.345–0.378, binlog
+    0.863–0.870, mixed 0.568–0.575, opaque 1.0076–1.0077. Targets sit 20–25%
+    above the reference on the text profiles, 5% on binlog, 12% on mixed.
+  * `_corpus._mixed` deliberately uses a FIXED segment plan and varies only the
+    vocabulary. The first version shuffled the profile order too, and the
+    reference's fraction of baseline then ranged 0.506–0.681 across seeds,
+    which would have made the mixed target a lottery.
+
+  Three bugs the suite caught, all in the reference:
+
+  * **A frame truncated by exactly one byte was accepted as complete.** The bit
+    reader invents zero padding past the end of the source so the last symbol
+    can be peeked; that padded `0x00` is indistinguishable from the
+    end-of-frame tag. The reference passed `robustness.last_byte_gone` by luck
+    of bit alignment and the LZ-disabled variant failed it, which is what
+    exposed it. `BitReader` now tracks how many bits in the accumulator came
+    from the source, and the structural reads refuse to be served invented
+    bytes. Re-verified over 442 truncation points: all detected.
+  * **An index overrun in the match finder** when a candidate match reached the
+    end of the available window — `data[other + best_length]` past the end of
+    the comparison slice. Found on the first run against real data.
+  * **Rebuilding code tables by allocation** kept two full sets of five tables
+    alive at hand-over and cost ~35 KiB of the budget. Tables are now rewritten
+    in place.
+
+  Things that could not be verified in this session, and are marked as such
+  rather than implied:
+
+  * **The image has not been built.** There is no docker daemon on the
+    authoring host. `environment/selfcheck.py` — the build-time assertion that
+    the seed works *and* is still inadequate — was run directly against the
+    starter and passes; the visible suite was run directly and passes 23/23.
+    Build the image once before submitting.
+  * **`taskset` does not exist here** (Windows), so the `cpus = 1` claim was
+    checked by starvation rather than by pinning: the full suite was re-run
+    under 32 competing busy loops on 16 cores -- roughly a third of a core --
+    and still scored **1.0000**, in 447 s wall against the grader's 780 s
+    deadline. The verifier runs one child process at a time and never threads,
+    so it is a single-core workload by construction; on a dedicated core it
+    takes about 90 s.
+  * `[verifier] timeout_sec = 1000` against a 1200 s form default, and the
+    grader's own deadline is 780 s. The reference needs 90 s, so the margin is
+    about 8x; a submission an order of magnitude slower than the reference
+    still finishes.

@@ -1,0 +1,7 @@
+# The bundle is unpacked inside a Linux container: a shell entrypoint with CRLF
+# line endings fails there with "bad interpreter: /usr/bin/env bash^M", and the
+# binary sample streams would be silently corrupted by newline translation.
+# This repository is authored on Windows, so neither is hypothetical.
+* text=auto eol=lf
+*.bin -text
+*.zip -text
