@@ -22,12 +22,15 @@ version = "1.0.0"
 [agent]
 # The rollout is fully sealed: everything the task needs is baked into the image.
 network_mode = "none"
-# Deliberately below the draft's 43200s (12h) envelope; the bundle must never ask
-# for more than the draft declares. 43200 is NOT the form default: 14400 was
+# Deliberately below the draft's 36000s (10h) envelope; the bundle must never ask
+# for more than the draft declares. 36000 is NOT the form default: 14400 was
 # rejected at Difficulty evaluation as "Too short for the collection - not
 # long-horizon", so the draft must be raised in the form and the raise confirmed
-# saved before this bundle is uploaded.
-timeout_sec = 42000
+# saved before this bundle is uploaded. Nor is 43200 available -- the form
+# refuses anything above 37000s, because build, verify and teardown come out of
+# the same 14h per-trial wall clock. 10h is the top of the band, not a
+# compromise.
+timeout_sec = 34800
 
 [verifier]
 entrypoint = "tests/test.sh"

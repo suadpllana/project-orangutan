@@ -216,12 +216,18 @@ resourceEstimate:
   memoryMb: 4096
   storageMb: 8192
   gpuCount: 0
-  agentTimeoutSec: 43200        # 12h. NOT the 14400 form default: that exact
-                                # value was rejected at Difficulty evaluation as
-                                # "Too short for the collection - not long-horizon".
+  agentTimeoutSec: 36000        # 10h. Both neighbours of this value are known
+                                # bad: 14400 (the form default) was rejected at
+                                # Difficulty evaluation as "Too short for the
+                                # collection - not long-horizon", and 43200 is
+                                # REFUSED BY THE FORM -- "Above 37000s (~10h),
+                                # leave room for build, verify, teardown, which
+                                # share a trial's 14h wall-clock limit." 36000 is
+                                # the largest round value inside the admissible
+                                # band, 1000s clear of the ceiling.
                                 # RAISE THIS IN THE FORM AND CONFIRM IT SAVED -
                                 # intake compares the bundle against the STORED
-                                # draft. See docs/difficulty-gate.md.        # 4 h; above the 7200 s long-horizon floor
+                                # draft. See docs/difficulty-gate.md.
   verifierTimeoutSec: 1200      # the form default; grade.py deadlines at 900 s
 
 networkRequirements:
@@ -541,9 +547,13 @@ notes: |
     deadline inside the 1200 s, and the per-category limits (60–420 s) may sum
     above it — the deadline absorbs that by design, marking later categories
     unrun rather than letting the harness kill the verifier.
-  * Trial budget: agent 14400 s + verifier 1200 s + build (~2 min) is well
-    inside the 50 400 s per-trial ceiling, and `agentTimeoutSec` clears the
-    7200 s long-horizon floor.
+  * Trial budget: agent 36000 s + verifier 1200 s + build (~2 min) is inside
+    the 50 400 s per-trial ceiling, and `agentTimeoutSec` clears the 7200 s
+    long-horizon floor with room to spare. 36000 is not a free choice at either
+    end: 14400 was rejected as "not long-horizon", and the form refuses anything
+    above 37000 s because build, verify and teardown come out of the same wall
+    clock. The pool reserve is therefore ~12 200 s, not the 1 800 s this
+    repository had assumed.
   * `[environment] network_mode = "open"` in `task.toml` is the *build* phase,
     which the guideline says is not gated; the rollout and the verifier are both
     `none`. This is the one value in the bundle that could not be checked

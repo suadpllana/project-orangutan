@@ -63,9 +63,15 @@ resourceEstimate:
   memoryMb: 4096                # 128-262,144; sandbox provides 65,536
   storageMb: 8192               # 128-1,048,576; sandbox provides 40,960
   gpuCount: 0                   # 0-8
-  agentTimeoutSec: 14400        # >= 7,200 (long-horizon floor)
-  verifierTimeoutSec: 2400      # must exceed the sum of your per-category timeouts
-  # agent + verifier + build + teardown must fit 50,400s
+  agentTimeoutSec: 36000        # 10h. The admissible band is (14,400, 37,000]:
+                                # 14400, the form default, was rejected as "not
+                                # long-horizon", and the form refuses anything
+                                # above 37000. Raise it in the FORM too and read
+                                # it back - intake compares the stored draft.
+  verifierTimeoutSec: 1200      # must exceed the sum of your per-category timeouts,
+                                # but raising it LOWERS the agent ceiling above
+  # agent + verifier + build + teardown must fit 50,400s, and the platform's
+  # reserve for build+teardown is ~12,200s - do not budget it yourself
 
 networkRequirements:
   mode: none                    # none | allowlist; open egress is not admitted

@@ -78,13 +78,33 @@ LONG_HORIZON_FLOOR_SEC = 7_200      # effective agentTimeoutSec must reach this
 # applies. A submission declaring agentTimeoutSec = 14400 -- the form default,
 # four hours -- was rejected at the Difficulty evaluation stage with
 # "Too short for the collection - not long-horizon", with every other stage
-# passed. So 14,400 is known-rejected, and the recommended value is most of the
-# per-trial pool: 43,200s (12h) leaves 7,200s for the verifier, the image build
-# and teardown inside the 50,400s ceiling.
+# passed. So 14,400 is known-rejected.
 LONG_HORIZON_KNOWN_REJECTED_SEC = 14_400
-LONG_HORIZON_RECOMMENDED_SEC = 43_200
+
+# ...and 43,200 (12h) is known-REFUSED, at the other end. The draft form itself
+# rejects it, before anything is uploaded:
+#
+#   Above 37000s (~10h) - leave room for build, verify, teardown, which share a
+#   trial's 14h wall-clock limit. A larger build or verify budget lowers this;
+#   the exact bound is the whole per-trial envelope, checked at intake.
+#
+# That is the number this file used to RECOMMEND. It was derived here by
+# subtracting a guessed 1,800s build-and-teardown allowance from the 50,400s
+# pool, and the guess was wrong by an order of magnitude: at the form's default
+# 1,200s verifier the platform holds back 50,400 - 37,000 - 1,200 = 12,200s for
+# build and teardown, not 1,800. Never infer one side of the envelope from the
+# other -- the reserve is the platform's and it is much larger than a build
+# takes.
+#
+# So the admissible band is (14,400, 37,000]. 36,000s (10h) is the largest round
+# value inside it and is what to use: 2.5x the value the difficulty gate
+# rejected, and 1,000s clear of the ceiling.
+AGENT_TIMEOUT_CEILING_SEC = 37_000
+LONG_HORIZON_RECOMMENDED_SEC = 36_000
 TRIAL_POOL_CEILING_SEC = 50_400     # build + agent + verify + teardown
-BUILD_TEARDOWN_ALLOWANCE_SEC = 1_800
+# What the platform actually reserves for build + teardown, implied by the
+# ceiling above rather than guessed. Kept for the pool arithmetic below.
+BUILD_TEARDOWN_ALLOWANCE_SEC = TRIAL_POOL_CEILING_SEC - AGENT_TIMEOUT_CEILING_SEC - 1_200
 
 MAX_ALLOWLIST_HOSTS = 100
 
@@ -213,12 +233,22 @@ def check_resources(doc: dict, report: Report) -> None:
             f"compares the bundle against the stored draft. "
             f"See docs/difficulty-gate.md."
         )
+    elif isinstance(agent, int) and agent > AGENT_TIMEOUT_CEILING_SEC:
+        report.error(
+            f"agentTimeoutSec={agent} ({agent / 3600:.1f}h) is above the "
+            f"{AGENT_TIMEOUT_CEILING_SEC}s ceiling the draft form enforces: "
+            f"'Above 37000s (~10h) - leave room for build, verify, teardown, "
+            f"which share a trial's 14h wall-clock limit.' The form refuses to "
+            f"store the value, so nothing downstream ever sees it. Use "
+            f"{LONG_HORIZON_RECOMMENDED_SEC} (10h). See docs/difficulty-gate.md."
+        )
     elif isinstance(agent, int) and agent < LONG_HORIZON_RECOMMENDED_SEC:
         report.warn(
             f"agentTimeoutSec={agent} ({agent / 3600:.1f}h) is below the "
-            f"{LONG_HORIZON_RECOMMENDED_SEC}s (12h) that fits comfortably in "
-            f"the per-trial pool. 4h was rejected as not long-horizon; the "
-            f"safe threshold above that is not known, so leave headroom."
+            f"{LONG_HORIZON_RECOMMENDED_SEC}s (10h) that is the largest round "
+            f"value the form accepts. 4h was rejected as not long-horizon and "
+            f"the safe threshold above that is not known, so take the whole "
+            f"band the platform allows rather than leaving horizon unclaimed."
         )
     if isinstance(agent, int) and isinstance(verifier, int):
         trial = agent + verifier + BUILD_TEARDOWN_ALLOWANCE_SEC
@@ -226,7 +256,8 @@ def check_resources(doc: dict, report: Report) -> None:
             report.error(
                 f"agent + verifier + ~{BUILD_TEARDOWN_ALLOWANCE_SEC}s for build and "
                 f"teardown is {trial}s, over the {TRIAL_POOL_CEILING_SEC}s per-trial "
-                f"ceiling"
+                f"ceiling. The agent budget and the verifier budget come out of one "
+                f"pool: raising the verifier lowers what the agent may ask for."
             )
 
     for field, default in FORM_DEFAULTS.items():
@@ -245,14 +276,44 @@ def check_resources(doc: dict, report: Report) -> None:
         # incoherent on its face, and the old check only fired below half the
         # estimate -- so a 7h task with a 4h agent budget passed silently. It
         # should not have.
-        if agent < hours * 3600:
+        #
+        # But it cannot be an unconditional error either, because the agent
+        # budget is capped at AGENT_TIMEOUT_CEILING_SEC and the expert estimate
+        # is not: the guideline says the estimate "is NOT a gate ... so give an
+        # honest figure however large". Past ~10.3h the two simply cannot be
+        # reconciled, and demanding it would force the estimate to be shaved to
+        # fit -- which is the one thing the guideline tells you not to do.
+        # So: error while the estimate is still purchasable, warn once it is not.
+        wanted = hours * 3600
+        if wanted > AGENT_TIMEOUT_CEILING_SEC:
+            if agent < LONG_HORIZON_RECOMMENDED_SEC:
+                report.error(
+                    f"expertTimeEstimateHours={hours} needs {wanted / 3600:.1f}h "
+                    f"and the form caps agentTimeoutSec at "
+                    f"{AGENT_TIMEOUT_CEILING_SEC / 3600:.1f}h, so claim the whole "
+                    f"band: {LONG_HORIZON_RECOMMENDED_SEC}, not {agent}."
+                )
+            else:
+                report.warn(
+                    f"expertTimeEstimateHours={hours} exceeds the "
+                    f"{AGENT_TIMEOUT_CEILING_SEC / 3600:.1f}h the form allows an "
+                    f"agent, so the budget is capped at {agent}s "
+                    f"({agent / 3600:.1f}h) by the trial envelope rather than by "
+                    f"your judgement. That is admissible - the estimate is "
+                    f"descriptive metadata, not a gate - but keep it honest and "
+                    f"make sure difficultyExplanation says the same number."
+                )
+        elif agent < wanted:
             report.error(
                 f"agentTimeoutSec={agent} ({agent / 3600:.1f}h) is less than the "
                 f"{hours}h you declared a human expert needs. An agent is not "
                 f"faster than the expert; raise the budget or lower the estimate."
             )
         else:
-            comfortable = hours * 3600 * 1.5
+            # Capped at the RECOMMENDED value, not at the ceiling: telling an
+            # author to sit on 37,000 exactly would leave no slack for the
+            # build and verify budgets that share the envelope with it.
+            comfortable = min(hours * 3600 * 1.5, LONG_HORIZON_RECOMMENDED_SEC)
             fits = (
                 comfortable + (verifier if isinstance(verifier, int) else 0)
                 + BUILD_TEARDOWN_ALLOWANCE_SEC <= TRIAL_POOL_CEILING_SEC

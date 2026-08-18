@@ -74,12 +74,21 @@ ranges:
   **7,200 s (2 h)** — but that is the *admissibility* floor, not this
   collection's bar. **`agentTimeoutSec: 14400`, the form default, was rejected
   at Difficulty evaluation as "Too short for the collection — not
-  long-horizon"**, with every other stage passed. Use **43,200 s (12 h)** unless
-  the task genuinely needs less, and never less than
-  `expertTimeEstimateHours × 3600`. See `docs/difficulty-gate.md`.
+  long-horizon"**, with every other stage passed. See `docs/difficulty-gate.md`.
+* **Agent ceiling — 37,000 s.** The other end of the same band, and the form
+  enforces it before anything is uploaded: *"Above 37000s (~10h) — leave room
+  for build, verify, teardown, which share a trial's 14h wall-clock limit. A
+  larger build or verify budget lowers this."* So the admissible band is
+  **(14,400, 37,000]**. Use **36,000 s (10 h)**: the largest round value inside
+  it, and never less than `expertTimeEstimateHours × 3600` unless that estimate
+  is itself above the ceiling, in which case take 36,000 and keep the honest
+  estimate.
 * **Per-trial ceiling.** The whole trial — build + agent + verify + teardown —
-  must fit **50,400 s (14 h)**. Outside that window the task is rejected at
-  intake.
+  must fit **50,400 s (14 h)**, and the agent's share is the *residue* after the
+  platform's own reserve, not after your estimate of a build. At the default
+  1,200 s verifier that reserve is ~12,200 s. **Raising `verifierTimeoutSec`
+  lowers what the agent may ask for.** Outside the window the task is rejected
+  at intake.
 * **Sandbox envelope.** The trial sandbox provides **8 CPUs, 65,536 MB memory,
   40,960 MB storage**. A request above that is rejected rather than run starved,
   because a task denied the resources it declared fails for infrastructure

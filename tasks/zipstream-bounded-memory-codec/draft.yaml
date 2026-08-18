@@ -198,13 +198,19 @@ resourceEstimate:
   memoryMb: 4096                # form default; task.toml asks for 2048
   storageMb: 8192               # form default; task.toml asks for 4096
   gpuCount: 0                   # equal is fine here, and only here
-  agentTimeoutSec: 43200        # 12h. NOT the 14400 form default: that exact
-                                # value was rejected at Difficulty evaluation as
-                                # "Too short for the collection - not long-horizon".
+  agentTimeoutSec: 36000        # 10h. Both neighbours of this value are known
+                                # bad: 14400 (the form default) was rejected at
+                                # Difficulty evaluation as "Too short for the
+                                # collection - not long-horizon", and 43200 is
+                                # REFUSED BY THE FORM -- "Above 37000s (~10h),
+                                # leave room for build, verify, teardown, which
+                                # share a trial's 14h wall-clock limit." 36000 is
+                                # the largest round value inside the admissible
+                                # band, 1000s clear of the ceiling.
                                 # RAISE THIS IN THE FORM AND CONFIRM IT SAVED -
                                 # intake compares the bundle against the STORED
                                 # draft. See docs/difficulty-gate.md.
-                                # task.toml asks for 42000.
+                                # task.toml asks for 34800.
   verifierTimeoutSec: 1200      # form default; task.toml asks for 1000
 
 networkRequirements:

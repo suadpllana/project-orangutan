@@ -113,7 +113,7 @@ grading host as on an idle one.
 
 ### Difficulty explanation
 
-`5448 / 20000 chars`
+`5713 / 20000 chars`
 
 The difficulty is not in any one of the three laws. It is that the obvious way
 to satisfy each of them breaks another, and the loop closes.
@@ -199,7 +199,11 @@ registry methods, no pre-releases, no extras, no lock files. The value types,
 the parser, the exception hierarchy and both fact classes are already written
 and are not part of the work. The reference implementation is a single 380-line
 module. An expert who knows what a conflict set is spends the time on the
-interaction, not on the scaffolding — hence 7 hours rather than 20.
+interaction, not on the scaffolding — hence twelve hours rather than
+twenty. Note that the agent gets ten: the form caps `agentTimeoutSec` at
+37,000 s because build, verify and teardown share the trial's 14 h wall
+clock, so the budget is the whole band the platform sells, not a judgement
+that the work is smaller than the estimate.
 
 ### Expert time estimate (hours)
 
@@ -513,7 +517,7 @@ found and closed. It now scores 0.0000.
 | memoryMb | 4096 |
 | storageMb | 8192 |
 | gpuCount | 0 |
-| agentTimeoutSec | 43200 |
+| agentTimeoutSec | 36000 |
 | verifierTimeoutSec | 1200 |
 
 ### Network requirements

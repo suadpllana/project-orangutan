@@ -66,9 +66,15 @@ of this has already cost two rejections.
 
 ## Resources and network
 
-- [ ] `agentTimeoutSec` is **43,200** (12 h), not the 14,400 form default —
-      14,400 was rejected as "Too short for the collection — not long-horizon".
-- [ ] `agentTimeoutSec` ≥ `expertTimeEstimateHours × 3600`, comfortably.
+- [ ] `agentTimeoutSec` is **36,000** (10 h): not the 14,400 form default —
+      rejected as "Too short for the collection — not long-horizon" — and not
+      above **37,000**, which the form itself refuses because build, verify and
+      teardown share the trial's 14 h wall clock.
+- [ ] `agentTimeoutSec` ≥ `expertTimeEstimateHours × 3600`, comfortably — or, if
+      the estimate is above ~10 h, the budget is at 36,000 and the prose says
+      the cap is the platform's, not a judgement about the work.
+- [ ] `verifierTimeoutSec` has not been raised to buy headroom somewhere else:
+      it comes out of the same envelope and lowers the agent ceiling.
 - [ ] The raised `agentTimeoutSec` has been **saved in the form, reloaded and
       read back** before uploading. Intake compares against the stored draft.
 - [ ] agent + verifier + build + teardown fits 50,400 s.
@@ -79,7 +85,8 @@ of this has already cost two rejections.
       is what the approved bundle ships. Confirm against the numbers actually
       stored in the form, read back by the submitter — not against your repo.
 - [ ] Nothing in `task.toml` exceeds the **form defaults** (2000 cpuMillis,
-      4096 MB, 8192 MB, 0 GPUs, 14400 s agent, 1200 s verifier) unless you have
+      4096 MB, 8192 MB, 0 GPUs, 14400 s agent, 1200 s verifier) — the agent
+      timeout being the one you must raise anyway — unless you have
       confirmed the raised value is saved in the form. Intake compares against
       the *stored* draft, not the one in your repo, and a raise that silently
       failed to save shows up as "<field> exceeds draft".

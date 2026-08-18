@@ -327,11 +327,30 @@ guideline's 7,200 s is the absolute floor, not this collection's bar, and
 with the horizon is disqualification, not modesty. Worse, the same draft
 declared `expertTimeEstimateHours: 7`, so it gave an agent four hours for work
 it had just certified takes an expert seven; `validate_draft.py` only warned
-below *half* the estimate, so it said nothing. Use **43,200 s (12 h)** for
-`agentTimeoutSec` and **42,000** in `task.toml`, keep
-`agent + verifier + 1800 ≤ 50,400`, and **raise the value in the form, save,
-reload and read it back before uploading** — intake compares against the stored
-draft (rule 4). `validate_draft.py` now errors on both mistakes.
+below *half* the estimate, so it said nothing.
+
+**The band has a hard top, and the first fix overshot it.** 43,200 was the number
+this rule used to give, and it does not reach the gate at all — the draft form
+refuses to store it: *"Above 37000s (~10h) — leave room for build, verify,
+teardown, which share a trial's 14h wall-clock limit. A larger build or verify
+budget lowers this; the exact bound is the whole per-trial envelope, checked at
+intake."* 43,200 came from subtracting a **guessed** 1,800 s build-and-teardown
+allowance from the 50,400 s pool. The platform's real reserve, implied by its own
+ceiling, is **~12,200 s** — seven times the guess. Never derive one side of the
+per-trial envelope from your own estimate of the other; and note that the
+guideline states the 50,400 s pool but not this ceiling, so the form's validation
+message is the only place it is written down.
+
+So the admissible band is **(14,400, 37,000]**. Use **36,000 s (10 h)** for
+`agentTimeoutSec` and **34,800** in `task.toml`, leave `verifierTimeoutSec` at
+1,200 — it comes out of the same envelope, so raising it lowers the agent
+ceiling — and **raise the value in the form, save, reload and read it back before
+uploading**: intake compares against the stored draft (rule 4). When the honest
+`expertTimeEstimateHours` is above ~10 h, keep it and take the cap; the guideline
+says that field is descriptive and "not a gate", so shaving it to match the
+budget falsifies the one number it asks you to be candid about. Say in the prose
+that the cap is the platform's. `validate_draft.py` now errors at both ends of
+the band and `check_bundle.py` applies the ceiling to `task.toml` too.
 `docs/difficulty-gate.md` has the full analysis and the checklist.
 
 ---

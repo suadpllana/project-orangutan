@@ -106,7 +106,10 @@ idea. Then stop and wait for me to choose.
   `tests/test.sh` entrypoint, not a shortcut.
 * `task.toml [environment]` asks for STRICTLY LESS than the draft on `cpus`,
   `memory_mb` and `storage_mb` (`gpus` stays 0), and both timeouts are below the
-  draft's. Nothing above the form defaults: 2000 / 4096 / 8192 / 0 / 14400 / 1200.
+  draft's. Nothing above the form defaults: 2000 / 4096 / 8192 / 0 / 14400 / 1200
+  — except `agentTimeoutSec`, which must be raised to 36000 in the form (14400 is
+  rejected as "not long-horizon", 37000 is the form's hard ceiling) with
+  `[agent] timeout_sec = 34800` in the bundle.
   If you claim `cpus = 1`, prove it with `taskset -c 0`.
 * The grader deletes stale reward artefacts before grading, writes `reward_file`
   under both names in every candidate directory, publishes a 0.0 floor before

@@ -31,11 +31,13 @@ tags = []
 # "allowlist" are admitted, "open" is refused. Must agree with the draft's
 # networkRequirements.mode, and must be stated explicitly.
 network_mode = "none"
-timeout_sec = 14400
+# Below the draft's 36000s (10h) envelope. 14400 was rejected as "not
+# long-horizon" and the form refuses anything above 37000s.
+timeout_sec = 34800
 
 [verifier]
 network_mode = "none"
-timeout_sec = 2400
+timeout_sec = 1000
 
 [environment]
 # The image build. Fetching packages here is normal and is not gated.

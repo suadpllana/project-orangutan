@@ -98,6 +98,12 @@ FORM_DEFAULTS = {
     "agentTimeoutSec": 14400,
     "verifierTimeoutSec": 1200,
 }
+# The draft form refuses an agentTimeoutSec above this, because build, verify
+# and teardown share the trial's 14h wall-clock limit. The bundle's number is
+# the EFFECTIVE one -- it is what the agent is actually given -- so the ceiling
+# binds here too, and a bundle under a draft that never stored is still capped.
+AGENT_TIMEOUT_CEILING_SEC = 37_000
+
 # task.toml key -> (draft key, multiplier to reach the draft's unit)
 BUNDLE_TO_DRAFT = {
     ("environment", "cpus"): ("cpuMillis", 1000),
@@ -297,6 +303,22 @@ def check_cross(bundle: Path, config: dict | None, draft: dict, report: Report) 
                     f"task.toml [{section}] timeout_sec={bundle_value} exceeds the "
                     f"draft's {draft_key}={draft_value}"
                 )
+            elif bundle_value == draft_value and section == "agent":
+                report.warn(
+                    f"task.toml [agent] timeout_sec={bundle_value} exactly equals "
+                    f"the draft's {draft_key}; ask for strictly less (see rule 3)"
+                )
+
+    agent_timeout = (config.get("agent") or {}).get("timeout_sec")
+    if isinstance(agent_timeout, int) and agent_timeout > AGENT_TIMEOUT_CEILING_SEC:
+        report.error(
+            f"task.toml [agent] timeout_sec={agent_timeout} is above the "
+            f"{AGENT_TIMEOUT_CEILING_SEC}s the draft form allows: 'Above 37000s "
+            f"(~10h) - leave room for build, verify, teardown, which share a "
+            f"trial's 14h wall-clock limit.' The bundle's value is the effective "
+            f"one, so this is checked at intake against the whole per-trial "
+            f"envelope. See docs/difficulty-gate.md."
+        )
 
     agent_mode = (config.get("agent") or {}).get("network_mode")
     draft_mode = (draft.get("networkRequirements") or {}).get("mode")
