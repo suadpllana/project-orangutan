@@ -95,6 +95,18 @@ stored `14400` and the bundle is rejected with *"agentTimeoutSec exceeds
 draft"* — a different error, same wasted attempt. This is the same failure mode
 recorded under rule 4 in `CLAUDE.md`, which cost an upload on `minikv`.
 
+### There is no bundle-side hedge
+
+It is tempting to leave `task.toml` at `timeout_sec = 14000` — safely under the
+stored `14400` whatever happens in the form — and raise only the draft, so that
+the gate sees 12 h and the "exceeds draft" check can never fire. It does not
+work, and the guideline says why: the floor is on the **effective**
+`agentTimeoutSec`, and the effective value is what the agent is actually given,
+which is the bundle's. A bundle asking for 4 h is a 4 h trial no matter what the
+draft says.
+
+So the form edit is unavoidable. Both numbers have to move, the draft first.
+
 ## Is a longer budget enough, or is the task too small?
 
 The message says "too short **for the collection**". The declared horizon is
