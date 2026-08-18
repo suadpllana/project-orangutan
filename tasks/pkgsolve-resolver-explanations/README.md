@@ -71,6 +71,21 @@ The image build has **not** been run in this repository's authoring environment
 assertion that the seed is still the seed — was run directly instead and passes.
 Build the image once before submitting.
 
+## Uploading
+
+The file to upload is **`pkgsolve-resolver-explanations.zip` in this directory**
+— 35 entries, `task.toml` at the archive root. Upload it exactly as it is.
+
+```bash
+python3 tools/verify_zip.py tasks/pkgsolve-resolver-explanations/pkgsolve-resolver-explanations.zip
+```
+
+Do **not** zip this directory: that buries every required path two levels down
+under `pkgsolve-resolver-explanations/bundle/` and the inspector rejects it with
+*"required file missing"*. Do not expand the archive and re-compress it either —
+macOS puts the wrapper back and adds a `__MACOSX/` tree. `verify_zip.py` detects
+both, and `--fix` repairs either one in place.
+
 ## Design notes
 
 Nothing in this task is timed. The cost model is a count of calls to

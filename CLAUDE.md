@@ -146,37 +146,52 @@ half the metadata did not. If a source you were pointed at is unreachable, stop
 and say so — do not infer a spec you were told exists.
 
 **2. Check the artifact the platform opens, not the one you wrote.** "Required
-file missing" has now been hit twice, by two different mechanisms that look
-identical from the outside. Both put the five required paths one directory too
-deep.
+file missing" has now been hit twice, and *the second time the archive I built
+was correct*. Both failures put the required paths below the archive root; only
+one of them was a packaging bug.
 
-*Mechanism 1 — the build.* `build_bundle.py` used to wrap the archive in a
-`<slug>/` directory. Every check in this repository looked at `bundle/` on disk
-and passed. The required paths are relative to the **archive root**; the
-guideline's `my-task/` diagram is the directory whose contents you zip.
-`build_bundle.py` now re-opens the ZIP and asserts the five paths before
-reporting success.
+*Mechanism 1 — the build wrapped it.* `build_bundle.py` used to put everything
+under `<slug>/`. Every check in this repository looked at `bundle/` on disk and
+passed. The required paths are relative to the **archive root**; the guideline's
+`my-task/` diagram is the directory whose *contents* you zip. `build_bundle.py`
+now re-opens the ZIP and asserts the five paths before reporting success.
 
-*Mechanism 2 — the download.* macOS expands a downloaded `.zip` automatically
-(Safari's "Open safe files after downloading" is on by default), so what is left
-on disk is a **folder**. Right-clicking it and choosing Compress rebuilds the
-`<slug>/` wrapper and adds a `__MACOSX/` tree and `.DS_Store` on top — 79
-entries where the original had 35, and not one required path at the root. This
-is what rejected `pkgsolve-resolver-explanations`, whose shipped archive was
-correct: repairing the re-compressed upload reproduced the *identical* sha256.
-`build_bundle.py`'s own verification cannot see this, because it ends at the
-filesystem the file was written to.
+*Mechanism 2 — there was no archive to upload, so the directory got zipped.*
+This is what rejected `pkgsolve-resolver-explanations`. `dist/` is gitignored
+and I never wrote the `tasks/<slug>/<slug>.zip` copy the conventions call for,
+so the only thing in the task folder that looked like "the bundle" was the
+folder itself. What reached the platform was a zip of `tasks/<slug>/`:
+38 entries, every required path two levels down under
+`pkgsolve-resolver-explanations/bundle/`, and `draft.yaml`, `README.md` and
+`submission.md` swept in beside them. The archive I had verified — 35 entries,
+five paths at the root — was never uploaded. **A verification that ends at the
+file you wrote does not cover the file they open.**
 
-**So verify the file that is actually being uploaded**:
+Two habits close it, and both are now enforced:
 
-```bash
-python3 tools/verify_zip.py <the-file-you-are-about-to-upload.zip>
-python3 tools/verify_zip.py <that-file.zip> --fix     # rewrites it flat
-```
+* `build_bundle.py` writes `tasks/<slug>/<slug>.zip` on every build, so the
+  hand-over copy is never missing and there is never an ambiguous folder to zip
+  by mistake. It also refuses to report success if a shell entrypoint carries
+  CRLF.
+* Audit the file that is actually going to be uploaded, whatever its provenance:
 
-It names the wrapper explicitly, flags the macOS artefacts, and `--fix` restores
-the original archive byte for byte. **And when you hand a bundle over, say in
-the same breath: upload the file as downloaded, do not expand it first.**
+  ```bash
+  python3 tools/verify_zip.py <the-file-you-are-about-to-upload.zip>
+  python3 tools/verify_zip.py <that-file.zip> --fix     # rewrites it flat
+  ```
+
+  It finds the wrapper at any depth, names it, lists the non-bundle files that
+  were swept in, flags `__MACOSX/` and `.DS_Store`, and `--fix` rebuilds the
+  archive flat with the executable bits intact.
+
+*A third route to the same rejection, worth knowing before it costs an upload:*
+macOS auto-expands a downloaded `.zip` (Safari's "Open safe files after
+downloading" is on by default), so what is left on disk is a folder;
+re-compressing it in Finder rebuilds the `<slug>/` wrapper and adds a
+`__MACOSX/` tree. Reproduced here with `ditto -c -k --keepParent`: 35 entries
+become 79 and not one required path sits at the root. **So when you hand a
+bundle over, say in the same breath: upload it as downloaded, do not expand it
+first.**
 
 **3. Ask the bundle for less than the draft on *every* field it declares.**
 Timeouts and resources alike: `14000` against a 14400 s draft, `600` against

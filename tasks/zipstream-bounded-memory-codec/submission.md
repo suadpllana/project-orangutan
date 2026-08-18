@@ -32,7 +32,7 @@ optimization
 
 ### Objective
 
-`3701 / 20000 chars`
+`3684 / 20000 chars`
 
 `/app` holds `zipstream`, the lossless codec a fleet telemetry agent uses to
 ship log and metric streams to a collector. It works — every stream it writes
@@ -94,7 +94,7 @@ Python. Nothing in the grade is a wall-clock measurement.
 
 ### Motivation
 
-`1288 / 10000 chars`
+`1284 / 10000 chars`
 
 Every fleet agent that ships logs or metrics off a device hits this exact
 wall, and hits it in this exact order. Version one compresses a buffer,
@@ -120,7 +120,7 @@ them in the order the grader reports them.
 
 ### Difficulty explanation
 
-`3382 / 20000 chars`
+`3368 / 20000 chars`
 
 The difficulty is not that any one requirement is hard. It is that the
 obvious way to satisfy each one is ruled out by another, so a submission has
@@ -183,7 +183,7 @@ honest and why a frontier model is unlikely to one-shot it.
 
 ### Environment summary
 
-`2135 / 20000 chars`
+`2119 / 20000 chars`
 
 `python:3.11-slim` with `pytest==8.3.3` installed at build time and nothing
 else; the implementation itself must be pure standard library. The rollout is
@@ -222,7 +222,7 @@ imported so a table built at module level is charged rather than forgiven.
 
 ### Oracle strategy
 
-`2762 / 20000 chars`
+`2756 / 20000 chars`
 
 `solution/reference/zipstream/` is a complete v2 codec, 29 KiB of pure
 standard-library Python in eight modules, and `solution/solve.sh` copies it
@@ -270,7 +270,7 @@ inside on the text profiles, 6% on binlog, 11% on mixed, and stable to under
 
 ### Verification strategy
 
-`3559 / 20000 chars`
+`3551 / 20000 chars`
 
 **The visible half** is `/app/public_tests/test_public.py` — 23 tests that
 pass on the untouched seed and describe only what must not regress: the API
@@ -345,7 +345,7 @@ visible suite.
 
 ### Partial score strategy
 
-`1815 / 10000 chars`
+`1807 / 10000 chars`
 
 Continuous and monotone. Eight scored categories with the weights in the
 table above, summing to 1.00; the ninth, `regression`, has weight zero and
@@ -381,7 +381,7 @@ work leaves it 0.15 below the threshold. That is the gap the task is about.
 
 ### Anticipated exploits
 
-`5588 / 20000 chars`
+`5573 / 20000 chars`
 
 **Keep the payload and hand back a receipt.** The oldest trick in compression
 benchmarking: `compress` stores the bytes in a module global, a class

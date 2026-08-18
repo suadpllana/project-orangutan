@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import shutil
 import stat
 import subprocess
 import sys
@@ -70,6 +71,14 @@ def build(task_dir: Path, run_checks: bool) -> bool:
 
     DIST.mkdir(exist_ok=True)
     target = DIST / f"{slug}.zip"
+    # The archive also lands beside its source as tasks/<slug>/<slug>.zip. That
+    # is the copy that gets handed over, and its absence is not a cosmetic
+    # problem: with no ZIP in the task directory, the thing to hand over looks
+    # like the directory itself, and zipping tasks/<slug>/ buries every required
+    # path two levels deep under <slug>/bundle/ and sweeps draft.yaml and
+    # submission.md in with it. That is a "required file missing" rejection, and
+    # it is the one that happened.
+    beside = task_dir / f"{slug}.zip"
 
     files = sorted(p for p in bundle.rglob("*") if p.is_file())
     written = 0
@@ -102,6 +111,15 @@ def build(task_dir: Path, run_checks: bool) -> bool:
     # let a packaging bug through.
     with zipfile.ZipFile(target) as archive:
         names = set(archive.namelist())
+        for entrypoint in sorted(EXECUTABLE):
+            if entrypoint in names and b"\r\n" in archive.read(entrypoint):
+                print(
+                    f"error: {entrypoint} has CRLF line endings; inside the "
+                    f"Linux container that fails with 'bad interpreter: "
+                    f"/usr/bin/env bash^M'. See .gitattributes.",
+                    file=sys.stderr,
+                )
+                return False
     missing = [path for path in REQUIRED_PATHS if path not in names]
     if missing:
         print(
@@ -111,9 +129,12 @@ def build(task_dir: Path, run_checks: bool) -> bool:
         )
         return False
 
+    shutil.copyfile(target, beside)
+
     size = target.stat().st_size
     digest = hashlib.sha256(target.read_bytes()).hexdigest()[:16]
     print(f"wrote {target.relative_to(REPO)} ({written} files, {size:,} bytes)")
+    print(f"      and {beside.relative_to(REPO)} - the copy to hand over")
     print("      required paths present at the archive root")
     # A fingerprint, so "which zip did you upload?" has an answer. Every send of
     # a bundle should quote it.
@@ -148,6 +169,13 @@ def main() -> int:
         print("no tasks found")
         return 1
 
+    if len(paths) > 1:
+        print(
+            f"note: rebuilding {len(paths)} tasks. An archive that has already "
+            f"been verified and handed over is replaced byte for byte only if "
+            f"its source is unchanged; check `git status` before committing.",
+            file=sys.stderr,
+        )
     return 0 if all(build(p.resolve(), not args.no_checks) for p in paths) else 1
 
 

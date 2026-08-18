@@ -12,12 +12,16 @@ inspection with *"required file missing"*, because the inspector looks for
 `task.toml`. This cost one upload artifact; `tools/build_bundle.py` now asserts
 the five required paths exist at the root of the ZIP it just wrote.
 
-**It cost a second one for a reason `build_bundle.py` cannot see.** macOS
-auto-expands a downloaded `.zip`, so the thing left on disk is a folder;
-re-compressing that folder in Finder puts the wrapper straight back and adds a
-`__MACOSX/` tree and `.DS_Store` besides. The archive that was built correctly
-and the archive that was uploaded are then different files with the same name.
-Verify the one you are about to upload:
+**It cost a second one with a correct archive.** `dist/` is gitignored, the
+`tasks/<slug>/<slug>.zip` hand-over copy was never written, and so the only
+thing in the task folder that looked like the bundle was the folder. What was
+uploaded was a zip of `tasks/<slug>/` — every required path two levels down
+under `<slug>/bundle/`, with `draft.yaml` and `submission.md` alongside. The
+verified 35-entry archive never left the machine. `build_bundle.py` now always
+writes `tasks/<slug>/<slug>.zip`; and a downloaded archive can pick the wrapper
+back up on its own, because macOS auto-expands `.zip` files and re-compressing
+the folder in Finder restores it and adds `__MACOSX/`. Either way, verify the
+one you are about to upload:
 
 ```bash
 python3 tools/verify_zip.py dist/<slug>.zip          # audit any .zip

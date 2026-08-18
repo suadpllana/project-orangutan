@@ -54,17 +54,27 @@ def is_junk(name: str) -> bool:
     return base in JUNK_NAMES or base.startswith("._")
 
 
-def common_top_level(names) -> str | None:
-    """The single directory every entry sits under, if there is exactly one."""
-    tops = {name.split("/")[0] for name in names if not is_junk(name)}
-    tops.discard("")
-    if len(tops) != 1:
+def find_wrapper(names) -> str | None:
+    """The shortest directory prefix under which all five required paths sit.
+
+    Not necessarily one level. Zipping `tasks/<slug>/` rather than
+    `tasks/<slug>/bundle/` buries them two deep, under `<slug>/bundle/`, and
+    sweeps `draft.yaml` and `submission.md` in as well -- which is the shape
+    that was actually uploaded and rejected.
+    """
+    present = set(names)
+    prefixes = set()
+    for name in names:
+        parts = name.split("/")
+        for depth in range(1, len(parts)):
+            prefixes.add("/".join(parts[:depth]))
+    candidates = [
+        prefix for prefix in prefixes
+        if all(f"{prefix}/{required}" in present for required in REQUIRED_PATHS)
+    ]
+    if not candidates:
         return None
-    only = tops.pop()
-    # A single top-level *file* is not a wrapper.
-    if all(name == only for name in names if not is_junk(name)):
-        return None
-    return only
+    return min(candidates, key=lambda prefix: (prefix.count("/"), len(prefix)))
 
 
 def audit(path: Path):
@@ -92,20 +102,25 @@ def audit(path: Path):
     missing = [required for required in REQUIRED_PATHS if required not in names]
     wrapper = None
     if missing:
-        wrapper = common_top_level(names)
+        wrapper = find_wrapper(names)
         if wrapper is not None:
-            under = [f"{wrapper}/{required}" for required in REQUIRED_PATHS]
-            if all(name in names for name in under):
+            depth = wrapper.count("/") + 1
+            problems.append(
+                f"every required path is {depth} director"
+                f"{'y' if depth == 1 else 'ies'} too deep, under {wrapper!r}. "
+                f"THIS IS THE 'required file missing' REJECTION. The inspector "
+                f"looks for 'task.toml', not '{wrapper}/task.toml'. "
+                f"Re-run with --fix."
+            )
+            strays = sorted(
+                name for name in real
+                if not name.startswith(wrapper + "/") and not name.endswith("/")
+            )
+            if strays:
                 problems.append(
-                    f"every required path is one directory too deep, under "
-                    f"{wrapper!r}. THIS IS THE 'required file missing' REJECTION. "
-                    f"The inspector looks for 'task.toml', not "
-                    f"'{wrapper}/task.toml'. Re-run with --fix."
-                )
-            else:
-                problems.append(
-                    f"missing at the archive root: {', '.join(missing)} "
-                    f"(and not all of them are under {wrapper!r} either)"
+                    f"{len(strays)} file(s) outside the bundle were swept in: "
+                    f"{', '.join(strays[:4])}. This archive is a zip of "
+                    f"tasks/<slug>/, not of tasks/<slug>/bundle/."
                 )
         else:
             problems.append(f"missing at the archive root: {', '.join(missing)}")
@@ -148,7 +163,9 @@ def repair(path: Path, wrapper: str | None) -> bool:
             if info.filename.endswith("/") or is_junk(info.filename):
                 continue
             name = info.filename
-            if wrapper and name.startswith(wrapper + "/"):
+            if wrapper:
+                if not name.startswith(wrapper + "/"):
+                    continue      # draft.yaml, submission.md, README - not bundle content
                 name = name[len(wrapper) + 1:]
             if not name:
                 continue
