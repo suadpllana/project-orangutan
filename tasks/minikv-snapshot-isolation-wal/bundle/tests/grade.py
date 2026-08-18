@@ -21,6 +21,7 @@ import sys
 import tempfile
 import time
 import tokenize
+import traceback
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Dict, List
@@ -262,8 +263,9 @@ def clear_stale_rewards() -> None:
     The agent can write to /logs. Without this, pre-creating reward.txt with
     1.0 would be a way to be scored without solving anything.
     """
-    for directory in (LOG_DIR, HERE):
-        for name in ("reward.txt", "score.txt", "score.json", "junit.xml"):
+    for directory in reward_dirs():
+        for name in ("reward.txt", "reward.json", "score.txt", "score.json",
+                     "junit.xml"):
             path = directory / name
             try:
                 if path.exists():
@@ -273,22 +275,83 @@ def clear_stale_rewards() -> None:
                 print(f"WARNING: could not clear a pre-existing {path}", flush=True)
 
 
-def publish_reward(report: Dict) -> None:
-    """Write the score everywhere the harness might read it."""
-    score = report["score"]
-    payloads = [
-        (LOG_DIR / "reward.txt", f"{score:.6f}\n"),
-        (LOG_DIR / "score.txt", f"{score:.6f}\n"),
-        (LOG_DIR / "score.json", json.dumps(report, indent=2)),
-        (HERE / "reward.txt", f"{score:.6f}\n"),
+def reward_dirs() -> List[Path]:
+    """Every directory the harness might look in for a reward file.
+
+    The rejection that taught us this said: "Your verifier completed without
+    writing a reward file (verifier/reward.txt or reward.json) - every trial
+    must produce one." Where the harness mounts the sealed suite is not
+    knowable from inside the bundle, so write to all of them. They are cheap.
+    """
+    candidates = [
+        LOG_DIR,                 # whatever [verifier] reward_file points at
+        Path("/logs"),
+        Path("/verifier"),
+        Path("/tests"),
+        HERE,                    # next to grade.py, wherever that landed
+        HERE.parent,
+        Path.cwd(),
+        Path("/tmp"),            # last resort: somewhere always writable
     ]
-    for path, payload in payloads:
+    seen, unique = set(), []
+    for path in candidates:
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(payload)
-        except OSError as exc:
-            if path.parent == LOG_DIR:
-                print(f"WARNING: could not write {path} ({exc})", flush=True)
+            resolved = path.resolve()
+        except OSError:
+            continue
+        if resolved not in seen:
+            seen.add(resolved)
+            unique.append(path)
+    return unique
+
+
+def publish_reward(score: float, report: Dict | None = None) -> None:
+    """Write reward.txt AND reward.json everywhere the harness might read.
+
+    Called once with 0.0 before any grading starts, so that a crash, a hang or
+    a harness-side timeout still leaves a reward file behind, and again with the
+    real score at the end. Never raises: a failure to write one location must
+    not stop the others.
+    """
+    score = max(0.0, min(1.0, float(score)))
+    text = f"{score:.6f}\n"
+    blob = json.dumps(
+        {
+            "reward": score,
+            "score": score,
+            "passed": bool(report["passed"]) if report and "passed" in report else score >= PASS_THRESHOLD,
+            "threshold": PASS_THRESHOLD,
+        },
+        indent=2,
+    )
+    detail = json.dumps(report, indent=2) if report is not None else blob
+
+    written = []
+    for directory in reward_dirs():
+        for name, payload in (
+            ("reward.txt", text),
+            ("reward.json", blob),
+            ("score.txt", text),
+            ("score.json", detail),
+        ):
+            try:
+                directory.mkdir(parents=True, exist_ok=True)
+                (directory / name).write_text(payload)
+                if name == "reward.txt":
+                    written.append(str(directory))
+            except (OSError, ValueError):
+                continue
+
+    # Say where the reward landed. A run that reaches here having written
+    # nowhere is a read-only-mount problem, and silence would hide it.
+    if written:
+        print(f"reward {score:.6f} written to: {', '.join(written)}", flush=True)
+    else:
+        print(
+            "ERROR: could not write a reward file anywhere - every candidate "
+            "directory was unwritable",
+            flush=True,
+        )
 
 
 def grade(submission: Path, deadline_seconds: float = DEFAULT_DEADLINE) -> Dict:
@@ -380,21 +443,44 @@ def main() -> int:
     args = parser.parse_args()
 
     clear_stale_rewards()
+    # Publish a floor immediately. Every trial must produce a reward file; if
+    # this process is killed, hangs, or raises on the next line, the harness
+    # still finds one rather than reporting that the verifier produced nothing.
+    publish_reward(0.0)
 
     print(f"implementation root: {args.submission}")
     print(f"log dir:             {LOG_DIR}")
+    print(f"reward locations:    {', '.join(str(d) for d in reward_dirs())}")
     print()
 
-    report = grade(args.submission.resolve(), args.deadline)
+    try:
+        report = grade(args.submission.resolve(), args.deadline)
+    except BaseException as exc:  # noqa: BLE001 - the reward must survive anything
+        traceback.print_exc()
+        publish_reward(
+            0.0,
+            {"score": 0.0, "passed": False, "grader_error": repr(exc)},
+        )
+        print()
+        print("=" * 68)
+        print("SCORE: 0.0000")
+        print(f"THRESHOLD: {PASS_THRESHOLD:.2f}")
+        print("RESULT: FAIL (grader error)")
+        print("=" * 68)
+        return 1
+
     report["threshold"] = PASS_THRESHOLD
     report["passed"] = (
         not report["integrity_error"] and report["score"] >= PASS_THRESHOLD
     )
     report["reward"] = report["score"]
 
-    publish_reward(report)
+    publish_reward(report["score"], report)
     if args.out is not None:
-        args.out.write_text(json.dumps(report, indent=2))
+        try:
+            args.out.write_text(json.dumps(report, indent=2))
+        except OSError:
+            pass
 
     print()
     if report["integrity_error"]:

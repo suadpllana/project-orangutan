@@ -43,8 +43,14 @@ of this has already cost two rejections.
 - [ ] `[environment]` declares `dockerfile`, `build_context` and the four
       resource figures — and **no `network_mode`**, which is what "resource
       declaration mismatch" means.
-- [ ] The grader really writes `reward_file`, and exits 0 only at or above
-      `pass_threshold`.
+- [ ] The grader writes **`reward.txt` AND `reward.json`** to every plausible
+      location, not just the declared `reward_file`, and exits 0 only at or
+      above `pass_threshold`.
+- [ ] A `0.0` floor is published **before grading starts**, from `test.sh` and
+      from `grade.py`. Prove it three ways: normal run, grader exception, and
+      `timeout -s KILL 3 bash tests/test.sh`. All three must leave a reward file.
+- [ ] The grading run is wrapped in `except BaseException` so a crash still
+      publishes a reward.
 - [ ] The grader **deletes stale reward artefacts** before running; the agent
       can write to `/logs`.
 - [ ] `test.sh` and `solve.sh` resolve `IMPL_ROOT` / `LOG_DIR` and search

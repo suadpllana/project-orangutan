@@ -8,3 +8,9 @@ dist/
 tasks/*/bundle/tests/reward.txt
 tasks/*/bundle/tests/score.*
 tasks/*/bundle/tests/junit.xml
+
+# reward artefacts a local verifier run scatters across candidate directories
+reward.txt
+reward.json
+score.txt
+score.json

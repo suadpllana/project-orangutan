@@ -100,9 +100,18 @@ to `/logs/reward.txt` (and, for good measure, `/logs/score.txt`,
 `/logs/score.json` and `/logs/junit.xml`), and exits 0 exactly when the score
 reaches `pass_threshold`. Two details matter:
 
+* **Every trial must produce a reward file, whatever happens.** Write a `0.0`
+  floor before grading starts and the real score at the end, to every plausible
+  location (`LOG_DIR`, `/logs`, `/verifier`, `/tests`, beside `grade.py`, its
+  parent, CWD, `/tmp`) under **both** names (`reward.txt` *and* `reward.json`).
+  Declaring `reward_file` is not enough: a run that dies before writing it is
+  rejected as *"your verifier completed without writing a reward file"*. Wrap
+  the grading run in `except BaseException` so a crash still publishes, and
+  print which locations were written so a read-only mount is visible.
 * **Delete stale reward artefacts before grading.** The agent can write to
   `/logs`. A `reward.txt` containing `1.0`, left behind before the verifier
-  runs, is otherwise indistinguishable from a perfect score.
+  runs, is otherwise indistinguishable from a perfect score. Do this *before*
+  the `0.0` floor, not after.
 * **The score is continuous and the threshold is below 1.0.** The approved task
   uses `0.85`. Pick a threshold that cannot be reached without doing the core of
   the work — check it against your category weights.

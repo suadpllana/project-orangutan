@@ -257,6 +257,38 @@ was not warned about. `docs/exploit-catalog.md` has the full table.
 
 ---
 
+## SOLVED: "completed without writing a reward file"
+
+Oracle & nop failed with:
+
+> Your verifier completed without writing a reward file
+> (`verifier/reward.txt` or `reward.json`) — **every trial must produce one.**
+
+The grader was writing `/logs/reward.txt`, `/logs/score.json` and a copy beside
+itself. It never wrote a file *named* `reward.json`, and never into a
+`verifier/` directory. Where the harness mounts the sealed suite is not knowable
+from inside the bundle, so do not try to guess it — write everywhere, under both
+names:
+
+```python
+LOG_DIR, /logs, /verifier, /tests, <dir of grade.py>, its parent, CWD, /tmp
+  x  reward.txt, reward.json, score.txt, score.json
+```
+
+Two rules make this bulletproof, and both are cheap:
+
+1. **Publish a `0.0` floor before grading starts**, from `test.sh` *and* again
+   from `grade.py`. A verifier that is killed, hangs, or raises on its first
+   line then still leaves a reward behind. Verified three ways: normal run
+   writes `1.000000`, a grader exception writes `0.000000`, and `SIGKILL` three
+   seconds in leaves `0.000000`.
+2. **Wrap the whole grading run in `except BaseException`** and publish `0.0`
+   on the way out. A grader that dies without a reward is reported as a verifier
+   bug, not as a failed submission — you lose the attempt either way.
+
+Then **print where the reward landed**. If every candidate directory is
+read-only you want that in the log, not silence.
+
 ## Three things that are easy to get wrong
 
 **A grader that gets killed reports nothing.** Per-category timeouts sum to more
