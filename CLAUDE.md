@@ -130,12 +130,15 @@ relative to the **archive root**; the guideline's `my-task/` diagram is the
 directory whose contents you zip. `build_bundle.py` now re-opens the ZIP and
 asserts the five paths before reporting success.
 
-**3. Ask the bundle for less than the draft declares, never the same.** The
-approved bundle asks for `timeout_sec = 14000` against a 14400 s draft envelope
-and `600` against 1200, with a comment saying exactly why. Equality is *legal*
-— `gpuCount: 0` against `gpus = 0` has to pass — but it leaves no room for the
-draft the platform stored to differ from the one in your repo, and that
-difference is invisible from here.
+**3. Ask the bundle for less than the draft declares, never the same — and
+that means *every* field, not just the timeouts.** The approved bundle asks for
+`timeout_sec = 14000` against a 14400 s draft envelope and `600` against 1200,
+with a comment saying exactly why. Applying that to the timeouts but leaving
+`cpus`/`memory_mb`/`storage_mb` at exact equality with the form defaults still
+produced "resource declaration mismatch", because equality has no tolerance for
+a stored draft that differs from the one in your repo — and that difference is
+invisible from here. `gpus = 0` is the one field that must be equal, because it
+cannot be less. `check_bundle.py` now warns on any other exact tie.
 
 **4. The draft you submitted is not the draft in your repo.** Intake compares
 every number in `task.toml` against the draft the platform *stored*, which you

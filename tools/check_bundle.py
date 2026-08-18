@@ -317,6 +317,15 @@ def check_cross(bundle: Path, config: dict | None, draft: dict, report: Report) 
         if not isinstance(bundle_value, (int, float)):
             continue
         default = FORM_DEFAULTS[draft_key]
+        # Equality is legal but fragile: the stored draft may differ from the
+        # one in this repo, and gpus is the only field that must be equal.
+        if key != "gpus" and bundle_value * scale == default:
+            report.warn(
+                f"task.toml [{section}] {key}={bundle_value} exactly equals the "
+                f"form default for {draft_key}. Ask for less: if the stored "
+                f"draft is even slightly lower, this is rejected as a "
+                f"'resource declaration mismatch'."
+            )
         if bundle_value * scale > default:
             report.warn(
                 f"task.toml [{section}] {key}={bundle_value} is above the form "

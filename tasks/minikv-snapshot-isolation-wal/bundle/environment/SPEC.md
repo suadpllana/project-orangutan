@@ -151,7 +151,7 @@ that reached the operating system counts as durable.
 
 ## 6. Performance
 
-Measured on the grading machine (2 CPU cores, no GPU, ordinary disk), with
+Measured on the grading machine (1 CPU core, no GPU, ordinary disk), with
 16-byte keys and 96-byte values:
 
 | workload                                                        | budget |

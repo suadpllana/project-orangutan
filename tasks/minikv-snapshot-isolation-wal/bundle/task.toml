@@ -41,7 +41,12 @@ pass_threshold = 0.85
 [environment]
 dockerfile = "environment/Dockerfile"
 build_context = "environment"
-cpus = 2
-memory_mb = 4096
-storage_mb = 8192
+# Deliberately below the draft's envelope (2000 cpuMillis / 4096 MB / 8192 MB),
+# on the same principle as the timeouts above: the bundle may ask for less,
+# never more, and the draft the platform stored cannot be read back from here.
+# The task is tiny -- the heaviest workload is 20k keys of ~112 bytes, and the
+# reference grades the whole suite in ~5s -- so this is what it actually needs.
+cpus = 1
+memory_mb = 2048
+storage_mb = 4096
 gpus = 0
