@@ -74,6 +74,15 @@ SANDBOX_MEMORY_MB = 65_536
 SANDBOX_STORAGE_MB = 40_960
 
 LONG_HORIZON_FLOOR_SEC = 7_200      # effective agentTimeoutSec must reach this
+# The guideline's 7,200s is the ABSOLUTE floor, not the bar this collection
+# applies. A submission declaring agentTimeoutSec = 14400 -- the form default,
+# four hours -- was rejected at the Difficulty evaluation stage with
+# "Too short for the collection - not long-horizon", with every other stage
+# passed. So 14,400 is known-rejected, and the recommended value is most of the
+# per-trial pool: 43,200s (12h) leaves 7,200s for the verifier, the image build
+# and teardown inside the 50,400s ceiling.
+LONG_HORIZON_KNOWN_REJECTED_SEC = 14_400
+LONG_HORIZON_RECOMMENDED_SEC = 43_200
 TRIAL_POOL_CEILING_SEC = 50_400     # build + agent + verify + teardown
 BUILD_TEARDOWN_ALLOWANCE_SEC = 1_800
 
@@ -193,6 +202,24 @@ def check_resources(doc: dict, report: Report) -> None:
             f"agentTimeoutSec={agent} is below the {LONG_HORIZON_FLOOR_SEC}s "
             f"long-horizon floor"
         )
+    elif isinstance(agent, int) and agent <= LONG_HORIZON_KNOWN_REJECTED_SEC:
+        report.error(
+            f"agentTimeoutSec={agent} ({agent / 3600:.1f}h). A submission with "
+            f"exactly this value was rejected at Difficulty evaluation with "
+            f"'Too short for the collection - not long-horizon', every other "
+            f"stage passed. The form default is not a recommendation. Use "
+            f"{LONG_HORIZON_RECOMMENDED_SEC} (12h) unless the task genuinely "
+            f"needs less, and confirm the raise SAVED in the form - intake "
+            f"compares the bundle against the stored draft. "
+            f"See docs/difficulty-gate.md."
+        )
+    elif isinstance(agent, int) and agent < LONG_HORIZON_RECOMMENDED_SEC:
+        report.warn(
+            f"agentTimeoutSec={agent} ({agent / 3600:.1f}h) is below the "
+            f"{LONG_HORIZON_RECOMMENDED_SEC}s (12h) that fits comfortably in "
+            f"the per-trial pool. 4h was rejected as not long-horizon; the "
+            f"safe threshold above that is not known, so leave headroom."
+        )
     if isinstance(agent, int) and isinstance(verifier, int):
         trial = agent + verifier + BUILD_TEARDOWN_ALLOWANCE_SEC
         if trial > TRIAL_POOL_CEILING_SEC:
@@ -214,11 +241,30 @@ def check_resources(doc: dict, report: Report) -> None:
 
     hours = doc.get("expertTimeEstimateHours")
     if isinstance(agent, int) and isinstance(hours, (int, float)):
-        if agent < hours * 3600 * 0.5:
-            report.warn(
-                f"agentTimeoutSec={agent} is less than half the {hours}h expert "
-                f"estimate"
+        # Giving the agent LESS time than a human expert is declared to need is
+        # incoherent on its face, and the old check only fired below half the
+        # estimate -- so a 7h task with a 4h agent budget passed silently. It
+        # should not have.
+        if agent < hours * 3600:
+            report.error(
+                f"agentTimeoutSec={agent} ({agent / 3600:.1f}h) is less than the "
+                f"{hours}h you declared a human expert needs. An agent is not "
+                f"faster than the expert; raise the budget or lower the estimate."
             )
+        else:
+            comfortable = hours * 3600 * 1.5
+            fits = (
+                comfortable + (verifier if isinstance(verifier, int) else 0)
+                + BUILD_TEARDOWN_ALLOWANCE_SEC <= TRIAL_POOL_CEILING_SEC
+            )
+            if agent < comfortable and fits:
+                report.warn(
+                    f"agentTimeoutSec={agent} ({agent / 3600:.1f}h) leaves an "
+                    f"agent barely the {hours}h an expert needs, and the "
+                    f"per-trial pool has room for {comfortable / 3600:.1f}h. "
+                    f"Long-horizon trials are budgeted above the expert "
+                    f"estimate, not level with it."
+                )
 
 
 def check_network(doc: dict, report: Report) -> None:

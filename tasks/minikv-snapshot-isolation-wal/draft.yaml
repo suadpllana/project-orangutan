@@ -216,7 +216,12 @@ resourceEstimate:
   memoryMb: 4096
   storageMb: 8192
   gpuCount: 0
-  agentTimeoutSec: 14400        # 4 h; above the 7200 s long-horizon floor
+  agentTimeoutSec: 43200        # 12h. NOT the 14400 form default: that exact
+                                # value was rejected at Difficulty evaluation as
+                                # "Too short for the collection - not long-horizon".
+                                # RAISE THIS IN THE FORM AND CONFIRM IT SAVED -
+                                # intake compares the bundle against the STORED
+                                # draft. See docs/difficulty-gate.md.        # 4 h; above the 7200 s long-horizon floor
   verifierTimeoutSec: 1200      # the form default; grade.py deadlines at 900 s
 
 networkRequirements:

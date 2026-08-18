@@ -71,7 +71,12 @@ Ask for what the task needs and no more. Three constraints bite beyond the raw
 ranges:
 
 * **Long-horizon floor.** Effective `agentTimeoutSec` must be at least
-  **7,200 s (2 h)**.
+  **7,200 s (2 h)** — but that is the *admissibility* floor, not this
+  collection's bar. **`agentTimeoutSec: 14400`, the form default, was rejected
+  at Difficulty evaluation as "Too short for the collection — not
+  long-horizon"**, with every other stage passed. Use **43,200 s (12 h)** unless
+  the task genuinely needs less, and never less than
+  `expertTimeEstimateHours × 3600`. See `docs/difficulty-gate.md`.
 * **Per-trial ceiling.** The whole trial — build + agent + verify + teardown —
   must fit **50,400 s (14 h)**. Outside that window the task is rejected at
   intake.

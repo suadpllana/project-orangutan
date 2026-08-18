@@ -113,7 +113,7 @@ grading host as on an idle one.
 
 ### Difficulty explanation
 
-`3761 / 20000 chars`
+`5448 / 20000 chars`
 
 The difficulty is not in any one of the three laws. It is that the obvious way
 to satisfy each of them breaks another, and the loop closes.
@@ -164,6 +164,35 @@ true across its *whole* width (citing `every a * requires b >=5.0.0` when
 `a 1.0.0` asks for something weaker is rejected), and citing two independent
 reasons for the same failure is sufficient but not minimal.
 
+**Why this is long-horizon rather than one insight.** None of the three laws
+can be attempted until the others are standing, so the work does not decompose
+into independent sittings; it is a single build that has to be carried a long
+way before any of it can be checked. A realistic ordering, with the time it
+took here:
+
+  * Read the specification and internalise §3.2 — the decision order is a
+    procedure, not a preference, and misreading it invalidates everything
+    downstream. (~1 h)
+  * A complete, correct backtracking search in the fixed order, with lazy
+    fetching. Correct and far over budget. (~1.5 h)
+  * Conflict-directed backjumping, with the two distinct conflict sets that
+    make the dead-end memo sound. This is where the reference had its first
+    real bug, and the bug does not show up as slowness — it shows up as
+    solvable instances reported unsolvable. (~2.5 h)
+  * Derived global constraints, plus the restart that makes them pay. Getting
+    the derivation sound (only for unconditionally-required packages, only
+    when every usable release has been read) is fiddly. (~2 h)
+  * The explanation: recording facts during the search, widening contiguous
+    runs, deletion-minimisation, and a satisfiability checker of your own to
+    drive it. (~2.5 h)
+  * Convincing yourself all three hold at once, which means building the
+    differential test the graded suite will run against you. (~2.5 h)
+
+Those numbers are what it actually took, and two of the bugs above were found
+only by the last step. An agent that writes the search, sees it pass the
+correctness categories and stops has spent perhaps a fifth of the work and
+will score in the eighties.
+
 **Why it is nevertheless achievable in the estimate.** The domain is small and
 fully specified: three-integer versions, conjunctions of six comparators, two
 registry methods, no pre-releases, no extras, no lock files. The value types,
@@ -174,7 +203,7 @@ interaction, not on the scaffolding — hence 7 hours rather than 20.
 
 ### Expert time estimate (hours)
 
-7
+12
 
 ## Environment & resources
 
@@ -484,7 +513,7 @@ found and closed. It now scores 0.0000.
 | memoryMb | 4096 |
 | storageMb | 8192 |
 | gpuCount | 0 |
-| agentTimeoutSec | 14400 |
+| agentTimeoutSec | 43200 |
 | verifierTimeoutSec | 1200 |
 
 ### Network requirements

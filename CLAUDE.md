@@ -36,6 +36,8 @@ docs/
   draft-fields.md          the draft: fields, bounds, enums
   bundle-format.md         the ZIP: required paths, task.toml, network phases
   submission-funnel.md     two-phase submission, the funnel stages, the review bar
+  difficulty-gate.md       the Difficulty evaluation stage - READ BEFORE SETTING TIMEOUTS
+  reward-contract.md       the reward file: the contract, and how it failed twice
   authoring-playbook.md    the end-to-end process, in order
   verifier-patterns.md     reusable grader mechanics, all of them run
   exploit-catalog.md       how agents game graders, and what stops each
@@ -132,7 +134,7 @@ repository were round-trips that a rebuilt attachment would have closed in one.
 
 ---
 
-## The fourteen rules
+## The fifteen rules
 
 Ordered by how much grief each one saves.
 
@@ -298,6 +300,23 @@ deselection and edits to the visible tests, all at once. Then forbid it in
 `instruction.md` *as well*, so a legitimate solution never trips a defence it
 was not warned about. `docs/exploit-catalog.md` has the full table.
 
+**15. The agent time budget is the long-horizon gate, and the form default
+fails it.** `pkgsolve-resolver-explanations` cleared Bundle structure,
+Similarity screening, Rubric review and Oracle & nop, then failed **Difficulty
+evaluation** with *"Too short for the collection — not long-horizon"*. The cause
+was one number: `agentTimeoutSec: 14400`, the form default, four hours. The
+guideline's 7,200 s is the absolute floor, not this collection's bar, and
+"ask for what the task needs and no more" is about CPU and memory — being frugal
+with the horizon is disqualification, not modesty. Worse, the same draft
+declared `expertTimeEstimateHours: 7`, so it gave an agent four hours for work
+it had just certified takes an expert seven; `validate_draft.py` only warned
+below *half* the estimate, so it said nothing. Use **43,200 s (12 h)** for
+`agentTimeoutSec` and **42,000** in `task.toml`, keep
+`agent + verifier + 1800 ≤ 50,400`, and **raise the value in the form, save,
+reload and read it back before uploading** — intake compares against the stored
+draft (rule 4). `validate_draft.py` now errors on both mistakes.
+`docs/difficulty-gate.md` has the full analysis and the checklist.
+
 ---
 
 ## "completed without writing a reward file" — twice, and the fix was wrong
@@ -356,6 +375,11 @@ working directory is the only place that will take a file: a normal run leaves
 the working tree**, including inside `bundle/`. `build_bundle.py` skips both and
 `check_bundle.py` warns about them, because shipping a stale score inside the
 archive would be worse than the bug this fixed.
+
+`docs/reward-contract.md` is the full playbook: the root list, the five rules,
+the three-way verification recipe and the pre-submit checklist. Copy the
+mechanism from `tasks/pkgsolve-resolver-explanations/bundle/tests/`; do not
+re-derive it.
 
 ## Three things that are easy to get wrong
 
