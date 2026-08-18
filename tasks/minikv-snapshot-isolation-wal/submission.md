@@ -555,7 +555,7 @@ after the fact.
 | memoryMb | 4096 |
 | storageMb | 8192 |
 | gpuCount | 0 |
-| agentTimeoutSec | 14400 |
+| agentTimeoutSec | 43200 |
 | verifierTimeoutSec | 1200 |
 
 ### Network requirements

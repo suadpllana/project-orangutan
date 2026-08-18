@@ -1,42 +1,119 @@
 #!/usr/bin/env bash
 # Sealed verifier entrypoint.
 #
-# Prints a human-readable report, writes the numeric reward to every location
-# the harness might read (reward.txt AND reward.json, under /logs, /verifier,
-# /tests and beside this script) and exits 0 only when the weighted score
-# reaches the pass threshold declared in task.toml.
+# Prints a human-readable report, writes the numeric reward everywhere the
+# harness might read it, and exits 0 only when the weighted score reaches the
+# pass threshold declared in task.toml.
 #
-# EVERY TRIAL MUST PRODUCE A REWARD FILE. This script therefore writes a 0.0
-# floor before it does anything else, and re-checks afterwards that at least one
-# reward file exists -- a verifier that dies without one is reported as
-# "completed without writing a reward file", which is a verifier bug, not a
-# submission failure.
+# EVERY TRIAL MUST PRODUCE A REWARD FILE. This has now been the reason for two
+# rejections, both reading:
+#
+#     Your verifier completed without writing a reward file
+#     (verifier/reward.txt or reward.json) - every trial must produce one.
+#
+# Read that path carefully: `verifier/reward.txt` is RELATIVE and carries a
+# directory component, `reward.json` does not. They are two paths under one root
+# the message never names. Writing to the absolute `/verifier` covers that root
+# only if it happens to be `/` -- which is why the second attempt failed the
+# same way as the first.
+#
+# So this script writes both names at every plausible root AND inside a
+# `verifier/` subdirectory of every plausible root, before it does anything
+# else, and again after grading. It then prints exactly which locations took the
+# file and which refused it, so a third failure is a measurement rather than
+# another guess.
 set -u
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export IMPL_ROOT="${IMPL_ROOT:-/app}"
 export LOG_DIR="${LOG_DIR:-/logs}"
 
-REWARD_DIRS="$LOG_DIR /logs /verifier /tests $HERE"
+# Roots, most specific first. Unset variables collapse to nothing and are
+# skipped. Only these variables are read, and only their values are printed --
+# the environment is never dumped.
+REWARD_ROOTS="
+${LOG_DIR:-}
+${REWARD_DIR:-}
+${VERIFIER_DIR:-}
+${OUTPUT_DIR:-}
+${OUTPUTS_DIR:-}
+${RESULTS_DIR:-}
+${RESULT_DIR:-}
+${TEST_OUTPUT_DIR:-}
+/logs
+/verifier
+/tests
+/output
+/outputs
+/results
+/app
+/workspace
+$HERE
+$HERE/..
+$PWD
+$PWD/..
+/tmp
+/var/tmp
+/
+"
+
+REWARD_WROTE=""
+REWARD_REFUSED=""
 
 write_reward() {
-    # $1 = score
-    for d in $REWARD_DIRS; do
-        mkdir -p "$d" 2>/dev/null || continue
-        printf '%s\n' "$1" > "$d/reward.txt" 2>/dev/null || true
-        printf '{"reward": %s, "score": %s}\n' "$1" "$1" > "$d/reward.json" 2>/dev/null || true
+    # $1 = score, printed verbatim into reward.txt / reward.json
+    REWARD_WROTE=""
+    REWARD_REFUSED=""
+    for root in $REWARD_ROOTS; do
+        [ -n "$root" ] || continue
+        for sub in "" "/verifier"; do
+            d="$root$sub"
+            if ! mkdir -p "$d" 2>/dev/null; then
+                REWARD_REFUSED="$REWARD_REFUSED $d"
+                continue
+            fi
+            if printf '%s\n' "$1" > "$d/reward.txt" 2>/dev/null; then
+                printf '{"reward": %s, "score": %s}\n' "$1" "$1" \
+                    > "$d/reward.json" 2>/dev/null || true
+                printf '%s\n' "$1" > "$d/score.txt" 2>/dev/null || true
+                REWARD_WROTE="$REWARD_WROTE $d"
+            else
+                REWARD_REFUSED="$REWARD_REFUSED $d"
+            fi
+        done
     done
 }
 
+report_reward() {
+    if [ -n "$REWARD_WROTE" ]; then
+        echo "reward file written to:$REWARD_WROTE"
+    else
+        echo "ERROR: no candidate directory accepted a reward file" >&2
+    fi
+    [ -n "$REWARD_REFUSED" ] && echo "         refused by:$REWARD_REFUSED"
+    return 0
+}
+
 have_reward() {
-    for d in $REWARD_DIRS; do
-        [ -s "$d/reward.txt" ] && return 0
-        [ -s "$d/reward.json" ] && return 0
+    for root in $REWARD_ROOTS; do
+        [ -n "$root" ] || continue
+        for sub in "" "/verifier"; do
+            [ -s "$root$sub/reward.txt" ] && return 0
+            [ -s "$root$sub/reward.json" ] && return 0
+        done
     done
     return 1
 }
 
+# The floor, before anything else can go wrong.
 write_reward "0.000000"
+
+echo "== minikv verifier =="
+echo "implementation: $IMPL_ROOT"
+echo "log dir:        $LOG_DIR"
+echo "working dir:    $PWD"
+echo "suite dir:      $HERE"
+report_reward
 
 # Locate the sealed suite, whichever way the harness laid the tests out.
 GRADER=""
@@ -60,22 +137,21 @@ if [ -z "$PY" ]; then
     exit 2
 fi
 
-echo "== minikv verifier =="
-echo "implementation: $IMPL_ROOT"
-echo "log dir:        $LOG_DIR"
 "$PY" -c "import sys; print('interpreter:', sys.version.split()[0])"
 echo
 
 "$PY" "$GRADER/grade.py"
 STATUS=$?
 
-# Belt and braces: if the grader somehow exited without publishing, the 0.0
-# floor written above is still on disk. Confirm it, and say so loudly if not.
+# Belt and braces. grade.py publishes the real score itself; if it somehow did
+# not, the 0.0 floor written above is still on disk. Confirm that, and if even
+# that is gone, write it again and say so loudly.
 if have_reward; then
     :
 else
     echo "WARNING: no reward file found after grading; writing a 0.0 floor" >&2
     write_reward "0.000000"
+    report_reward
 fi
 
 echo

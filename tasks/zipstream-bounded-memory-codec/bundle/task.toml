@@ -27,9 +27,12 @@ version = "1.0.0"
 [agent]
 # The rollout is fully sealed: everything the task needs is baked into the image.
 network_mode = "none"
-# Deliberately below the draft's 14400s envelope; the bundle must never ask for
-# more than the draft declares.
-timeout_sec = 14000
+# Deliberately below the draft's 43200s (12h) envelope; the bundle must never ask
+# for more than the draft declares. 43200 is NOT the form default: 14400 was
+# rejected at Difficulty evaluation as "Too short for the collection - not
+# long-horizon", so the draft must be raised in the form and the raise confirmed
+# saved before this bundle is uploaded.
+timeout_sec = 42000
 
 [verifier]
 entrypoint = "tests/test.sh"

@@ -151,7 +151,13 @@ def check_structure(bundle: Path, report: Report) -> dict | None:
         seen[lowered] = relative
         if "__pycache__" in parts or path.name.endswith(".pyc"):
             report.warn(f"build artefact in the bundle: {relative}")
-        if path.name in ("reward.txt", "score.txt", "score.json", "junit.xml"):
+        if "verifier" in parts[:-1]:
+            report.warn(
+                f"a local grader run left {relative} behind - delete the "
+                f"verifier/ directory; it must never ship inside the archive"
+            )
+        if path.name in ("reward.txt", "reward.json", "score.txt",
+                         "score.json", "junit.xml"):
             report.warn(
                 f"reward artefact left by a local grader run: {relative} — "
                 f"delete it; a stale score must never ship inside the archive"

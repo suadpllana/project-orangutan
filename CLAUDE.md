@@ -36,6 +36,8 @@ docs/
   draft-fields.md          the draft: fields, bounds, enums
   bundle-format.md         the ZIP: required paths, task.toml, network phases
   submission-funnel.md     two-phase submission, the funnel stages, the review bar
+  difficulty-gate.md       the Difficulty evaluation stage - READ BEFORE SETTING TIMEOUTS
+  reward-contract.md       the reward file: the contract, and how it failed twice
   authoring-playbook.md    the end-to-end process, in order
   verifier-patterns.md     reusable grader mechanics, all of them run
   exploit-catalog.md       how agents game graders, and what stops each
@@ -132,7 +134,7 @@ repository were round-trips that a rebuilt attachment would have closed in one.
 
 ---
 
-## The fourteen rules
+## The fifteen rules
 
 Ordered by how much grief each one saves.
 
@@ -298,39 +300,88 @@ deselection and edits to the visible tests, all at once. Then forbid it in
 `instruction.md` *as well*, so a legitimate solution never trips a defence it
 was not warned about. `docs/exploit-catalog.md` has the full table.
 
+**15. The agent time budget is the long-horizon gate, and the form default
+fails it.** `pkgsolve-resolver-explanations` cleared Bundle structure,
+Similarity screening, Rubric review and Oracle & nop, then failed **Difficulty
+evaluation** with *"Too short for the collection — not long-horizon"*. The cause
+was one number: `agentTimeoutSec: 14400`, the form default, four hours. The
+guideline's 7,200 s is the absolute floor, not this collection's bar, and
+"ask for what the task needs and no more" is about CPU and memory — being frugal
+with the horizon is disqualification, not modesty. Worse, the same draft
+declared `expertTimeEstimateHours: 7`, so it gave an agent four hours for work
+it had just certified takes an expert seven; `validate_draft.py` only warned
+below *half* the estimate, so it said nothing. Use **43,200 s (12 h)** for
+`agentTimeoutSec` and **42,000** in `task.toml`, keep
+`agent + verifier + 1800 ≤ 50,400`, and **raise the value in the form, save,
+reload and read it back before uploading** — intake compares against the stored
+draft (rule 4). `validate_draft.py` now errors on both mistakes.
+`docs/difficulty-gate.md` has the full analysis and the checklist.
+
 ---
 
-## SOLVED: "completed without writing a reward file"
+## "completed without writing a reward file" — twice, and the fix was wrong
 
-Oracle & nop failed with:
+Oracle & nop has failed twice with:
 
 > Your verifier completed without writing a reward file
 > (`verifier/reward.txt` or `reward.json`) — **every trial must produce one.**
 
-The grader was writing `/logs/reward.txt`, `/logs/score.json` and a copy beside
-itself. It never wrote a file *named* `reward.json`, and never into a
-`verifier/` directory. Where the harness mounts the sealed suite is not knowable
-from inside the bundle, so do not try to guess it — write everywhere, under both
-names:
+**Read the two paths in that message.** `verifier/reward.txt` is written
+*relative* and carries a directory component; `reward.json` is written relative
+with none. They are two paths under one root the message never names.
 
-```python
-LOG_DIR, /logs, /verifier, /tests, <dir of grade.py>, its parent, CWD, /tmp
-  x  reward.txt, reward.json, score.txt, score.json
+The first fix read it as naming two *absolute* locations and wrote to a list of
+absolute directories — `LOG_DIR, /logs, /verifier, /tests, <dir of grade.py>,
+its parent, CWD, /tmp` × `reward.txt, reward.json, score.txt, score.json`. That
+covers `verifier/reward.txt` **only if the unnamed root happens to be `/`**. It
+was recorded here as SOLVED while the stage was still running; it was not. The
+identical rejection came back on the next task.
+
+### What actually works
+
+Take every plausible root, and under each write the reward **both at the root
+and inside a `verifier/` subdirectory of it**:
+
+```
+roots:  $LOG_DIR, $REWARD_DIR, $VERIFIER_DIR, $OUTPUT_DIR, $OUTPUTS_DIR,
+        $RESULTS_DIR, $RESULT_DIR, $TEST_OUTPUT_DIR,
+        /logs /verifier /tests /output /outputs /results /app /workspace
+        <dir of grade.py>, its parent, $PWD, $PWD/.., /tmp /var/tmp /
+each x   {"", "/verifier"}
+each x   reward.txt, reward.json, score.txt, score.json
 ```
 
-Two rules make this bulletproof, and both are cheap:
+Four rules make it hold, and all four are cheap:
 
 1. **Publish a `0.0` floor before grading starts**, from `test.sh` *and* again
-   from `grade.py`. A verifier that is killed, hangs, or raises on its first
-   line then still leaves a reward behind. Verified three ways: normal run
-   writes `1.000000`, a grader exception writes `0.000000`, and `SIGKILL` three
-   seconds in leaves `0.000000`.
-2. **Wrap the whole grading run in `except BaseException`** and publish `0.0`
-   on the way out. A grader that dies without a reward is reported as a verifier
-   bug, not as a failed submission — you lose the attempt either way.
+   from `grade.py`, over that whole net.
+2. **Wrap the grading run in `except BaseException`** and publish on the way
+   out. A grader that dies without a reward is reported as a verifier bug.
+3. **Never create a directory just to empty it, and prefer not to empty it at
+   all.** `clear_stale_rewards` skips roots that do not already exist, so
+   widening the net cannot turn a read-only mount into a failure — but *deleting*
+   a stale reward is itself the next bug on this list: see "It came back anyway"
+   below. Overwrite; only unlink a file that refuses to be written.
+4. **Print every location that took the file and every one that refused it.**
+   Both failures above were silent, which is why the second one had to be
+   reasoned about instead of read off a log. `test.sh` now prints `$PWD`, the
+   suite directory and both lists before it does anything else.
 
-Then **print where the reward landed**. If every candidate directory is
-read-only you want that in the log, not silence.
+Verified three ways with `LOG_DIR` unset and `/logs` unwritable, so that the
+working directory is the only place that will take a file: a normal run leaves
+`1.000000` in `./reward.json` and `./verifier/reward.txt`, an exception inside
+`grade()` leaves `0.000000` in both, and `SIGKILL` three seconds in leaves
+`0.000000` in both.
+
+**A local grader run now scatters `reward.*` and `verifier/` directories through
+the working tree**, including inside `bundle/`. `build_bundle.py` skips both and
+`check_bundle.py` warns about them, because shipping a stale score inside the
+archive would be worse than the bug this fixed.
+
+`docs/reward-contract.md` is the full playbook: the root list, the five rules,
+the three-way verification recipe and the pre-submit checklist. Copy the
+mechanism from `tasks/pkgsolve-resolver-explanations/bundle/tests/`; do not
+re-derive it.
 
 ### It came back anyway, on a bundle that already did all of that
 

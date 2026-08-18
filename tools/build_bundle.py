@@ -34,6 +34,9 @@ SKIP_SUFFIXES = {".pyc", ".pyo"}
 # Reward artefacts a local grader run leaves behind. Shipping one would put a
 # stale score inside the archive.
 SKIP_NAMES = {"reward.txt", "reward.json", "score.txt", "score.json", "junit.xml"}
+# The verifier now writes a reward into `<dir>/verifier/` under every root it
+# can reach, so a local grader run leaves those directories inside bundle/.
+SKIP_DIR_NAMES = {"verifier"}
 EXECUTABLE = {"tests/test.sh", "solution/solve.sh"}
 
 # The exact set the inspection stage looks for, at the archive root.
@@ -48,6 +51,8 @@ REQUIRED_PATHS = [
 
 def should_skip(relative: Path) -> bool:
     if any(part in SKIP_DIRS for part in relative.parts):
+        return True
+    if any(part in SKIP_DIR_NAMES for part in relative.parts[:-1]):
         return True
     if relative.name in SKIP_NAMES:
         return True

@@ -66,7 +66,11 @@ of this has already cost two rejections.
 
 ## Resources and network
 
-- [ ] `agentTimeoutSec` ≥ 7,200 s (the long-horizon floor).
+- [ ] `agentTimeoutSec` is **43,200** (12 h), not the 14,400 form default —
+      14,400 was rejected as "Too short for the collection — not long-horizon".
+- [ ] `agentTimeoutSec` ≥ `expertTimeEstimateHours × 3600`, comfortably.
+- [ ] The raised `agentTimeoutSec` has been **saved in the form, reloaded and
+      read back** before uploading. Intake compares against the stored draft.
 - [ ] agent + verifier + build + teardown fits 50,400 s.
 - [ ] Nothing exceeds the sandbox envelope (8 CPUs / 65,536 MB / 40,960 MB).
 - [ ] `task.toml` timeouts are **below** the draft's envelope (the approved
