@@ -58,12 +58,11 @@ of this has already cost two rejections.
 - [ ] `agentTimeoutSec` ≥ 7,200 s (the long-horizon floor).
 - [ ] agent + verifier + build + teardown fits 50,400 s.
 - [ ] Nothing exceeds the sandbox envelope (8 CPUs / 65,536 MB / 40,960 MB).
-- [ ] `task.toml` timeouts **and resources** are strictly below the draft's
-      envelope, not equal to it (the approved bundle uses 14000 against 14400
-      and 600 against 1200; do the same for `cpus`, `memory_mb`, `storage_mb`).
-      `gpus = 0` is the one field that must be equal, because it cannot be less.
-      An exact tie on any other field is a rejection waiting for a stored draft
-      that differs from yours by one notch.
+- [ ] `task.toml` timeouts are **below** the draft's envelope (the approved
+      bundle uses 14000 against 14400 and 600 against 1200) and the four
+      `[environment]` resources **equal** the draft's `resourceEstimate`, which
+      is what the approved bundle ships. Confirm against the numbers actually
+      stored in the form, read back by the submitter — not against your repo.
 - [ ] Nothing in `task.toml` exceeds the **form defaults** (2000 cpuMillis,
       4096 MB, 8192 MB, 0 GPUs, 14400 s agent, 1200 s verifier) unless you have
       confirmed the raised value is saved in the form. Intake compares against

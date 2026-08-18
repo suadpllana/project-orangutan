@@ -97,7 +97,10 @@ python3 tools/build_bundle.py --all        # rebuilds dist/<slug>.zip
 ```
 
 then **re-verify the oracle**, commit, push, and **hand the rebuilt
-`dist/<slug>.zip` back to the user in the same reply**. `dist/` is gitignored and
+`dist/<slug>.zip` back to the user in the same reply, quoting the `sha256:`
+fingerprint `build_bundle.py` prints**. Every send has the same filename, so
+without the fingerprint neither of you can tell which one was uploaded — and a
+stale upload looks exactly like a fix that did not work. `dist/` is gitignored and
 the session container is ephemeral, so the ZIP is not recoverable from the repo
 — if you do not send the file, the user has nothing to upload and the fix is
 worthless to them. Say in one line what changed and whether the draft needs
@@ -130,15 +133,15 @@ relative to the **archive root**; the guideline's `my-task/` diagram is the
 directory whose contents you zip. `build_bundle.py` now re-opens the ZIP and
 asserts the five paths before reporting success.
 
-**3. Ask the bundle for less than the draft declares, never the same — and
-that means *every* field, not just the timeouts.** The approved bundle asks for
-`timeout_sec = 14000` against a 14400 s draft envelope and `600` against 1200,
-with a comment saying exactly why. Applying that to the timeouts but leaving
-`cpus`/`memory_mb`/`storage_mb` at exact equality with the form defaults still
-produced "resource declaration mismatch", because equality has no tolerance for
-a stored draft that differs from the one in your repo — and that difference is
-invisible from here. `gpus = 0` is the one field that must be equal, because it
-cannot be less. `check_bundle.py` now warns on any other exact tie.
+**3. Ask the bundle for less than the draft on the timeouts; match it on the
+resources.** That is what the approved bundle does: `timeout_sec = 14000`
+against a 14400 s draft envelope and `600` against 1200, but `cpus = 2`,
+`memory_mb = 4096`, `storage_mb = 8192`, `gpus = 0` exactly equal to a
+default draft. Do not "improve" on this by lowering the resources — I tried it
+on a hunch and it is unsupported by any evidence; equality there is what an
+approved task ships. Verify against the numbers actually stored in the form
+(ask the submitter to read them back) rather than reasoning about which
+comparison the intake uses.
 
 **4. The draft you submitted is not the draft in your repo.** Intake compares
 every number in `task.toml` against the draft the platform *stored*, which you

@@ -18,6 +18,7 @@ whatever the zip writer defaults to.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import stat
 import subprocess
 import sys
@@ -107,8 +108,12 @@ def build(task_dir: Path, run_checks: bool) -> bool:
         return False
 
     size = target.stat().st_size
+    digest = hashlib.sha256(target.read_bytes()).hexdigest()[:16]
     print(f"wrote {target.relative_to(REPO)} ({written} files, {size:,} bytes)")
     print("      required paths present at the archive root")
+    # A fingerprint, so "which zip did you upload?" has an answer. Every send of
+    # a bundle should quote it.
+    print(f"      sha256:{digest}")
     if size > 512 * 1024 * 1024:
         print("error: over the 512 MiB upload cap", file=sys.stderr)
         return False
